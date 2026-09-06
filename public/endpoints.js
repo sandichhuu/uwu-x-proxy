@@ -171,7 +171,6 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
   const headerActions = el('div', undefined, header, 'tabs');
   headerActions.style.marginBottom = '0';
   const addRecordBtn = el('button', '+ Add Endpoint Record', headerActions, 'primary');
-  const ollamaBtn = el('button', 'Use Ollama preset', headerActions);
 
   // Add Endpoint Form Container (toggleable)
   const formWrap = el('div', undefined, parent);
@@ -204,14 +203,6 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
   addRecordBtn.onclick = () => {
     formWrap.style.display = formWrap.style.display === 'none' ? 'block' : 'none';
     if (formWrap.style.display === 'block') nameInput.focus();
-  };
-
-  ollamaBtn.onclick = () => {
-    formWrap.style.display = 'block';
-    nameInput.value = 'Ollama';
-    baseUrlInput.value = 'http://localhost:11434/v1';
-    apiKeyInput.value = '';
-    nameInput.focus();
   };
 
   const listContainer = el('div', undefined, parent);
