@@ -282,7 +282,7 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
                 newItems.push({
                   key: pubId,
                   value: upId,
-                  effort: m.effort || { mode: 'passthrough', supported: [] },
+                  effort: m.effort || { mode: 'forward', supported: [] },
                   mapped: true,
                   originalKey: pubId
                 });

@@ -7,7 +7,7 @@ export class Store {
     this.dataDir = dataDir;
     this.stateFile = path.join(dataDir, 'state.json');
     this.keyFile = keyFile;
-    this.data = { version: 1, endpoints: [], models: [], accounts: [], requests: [], settings: { proxyKey: '' } };
+    this.data = { version: 1, endpoints: [], models: [], routes: [], accounts: [], requests: [], settings: { proxyKey: '' } };
     this.load();
   }
   secretKey() {
@@ -36,8 +36,10 @@ export class Store {
     let saved;
     try { saved = JSON.parse(fs.readFileSync(this.stateFile, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return; throw new Error('Cannot read state safely; restore a valid state file', { cause: e }); }
     for (const key of ['endpoints', 'models', 'accounts', 'requests']) if (!Array.isArray(saved[key])) throw new Error('Invalid state schema');
+    if (saved.routes !== undefined && !Array.isArray(saved.routes)) throw new Error('Invalid state schema');
     const { adminKey: _legacyAdminKey, ...savedSettings } = saved.settings || {};
     this.data = { ...this.data, ...saved, settings: { ...this.data.settings, ...savedSettings } };
+    if (!Array.isArray(this.data.routes)) this.data.routes = [];
     for (const ep of this.data.endpoints) ep.apiKey = this.decrypt(ep.apiKey);
     for (const account of this.data.accounts) for (const key of ['accessToken', 'refreshToken', 'idToken']) account[key] = this.decrypt(account[key]);
     this.data.settings.proxyKey = this.decrypt(this.data.settings.proxyKey);

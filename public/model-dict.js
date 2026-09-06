@@ -1,6 +1,24 @@
 // Reusable Key-Value Model Dictionary & Quota / Toggle Components
 // Supports both Accounts (Google/OpenAI) and API Endpoints.
 
+export function accountModelCards(models, provider) {
+  if (!Array.isArray(models)) return [];
+  return models.map(model => {
+    const upstreamId = model.upstreamId || model.id;
+    const publicId = provider === 'google'
+      ? model.id.replace(/^(gemini-3\.[678]-flash)-medium-(low)$/i, '$1-$2')
+      : model.id;
+    return {
+      ...model,
+      id: publicId,
+      upstreamId,
+      // An account row maps one public name to exactly one card. It must not
+      // aggregate card variants or rewrite a future request's effort.
+      effort: { mode: 'forward', supported: [] }
+    };
+  });
+}
+
 export function toggleSwitch({ checked = true, onChange, ariaLabel = '', label = '' }) {
   const wrap = document.createElement('label');
   wrap.className = 'toggle-switch';
@@ -212,7 +230,7 @@ export function renderModelDictionary(parent, {
             id: pubId,
             upstreamId: upId,
             provider: provider || 'google',
-            effort: item.effort || { mode: 'passthrough', supported: [] },
+            effort: item.effort || { mode: 'forward', supported: [] },
             enabled: true
           })
         });
@@ -353,7 +371,7 @@ export function renderModelDictionary(parent, {
         if (!pubId || !upId || seenIds.has(pubId)) continue;
         seenIds.add(pubId);
 
-        const effortConfig = m.effort || (m.supported?.length ? { mode: 'passthrough', supported: m.supported, default: m.default } : undefined);
+        const effortConfig = m.effort || (m.supported?.length ? { mode: 'forward', supported: m.supported, default: m.default } : undefined);
         try {
           if (endpointId) {
             await api(`endpoints/${encodeURIComponent(endpointId)}/models`, {
@@ -367,7 +385,7 @@ export function renderModelDictionary(parent, {
                 id: pubId,
                 upstreamId: upId,
                 provider: provider || 'google',
-                effort: effortConfig || { mode: 'passthrough', supported: [] },
+                effort: effortConfig || { mode: 'forward', supported: [] },
                 enabled: true
               })
             });

@@ -58,7 +58,7 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
   }
   function provider() {
     return { displayName: 'uwu-x-proxy', apiKeyEnv: 'UWU_PROXY_KEY', api: 'anthropic-messages', baseURL,
-      models: store.list('models').filter(m => m.enabled !== false).map(modelEntry) };
+      models: (store.list('routes').length ? store.list('routes') : store.list('models')).filter(m => m.enabled !== false).map(modelEntry) };
   }
   function planFrom(current) {
     if (current.state === 'invalid') throw conflict(current.diagnostic);

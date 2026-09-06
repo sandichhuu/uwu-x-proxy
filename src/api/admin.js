@@ -24,7 +24,7 @@ export function adminRouter(store) {
  r.post('/models', (req,res) => {
    const { id: modelId, endpointId, upstreamId, name, effort, provider, accountIds, enabled = true, strategy = 'round-robin', variants, sources } = req.body;
    if (!modelId || !upstreamId || (!endpointId && !provider)) return res.status(400).json({ error: 'id, upstreamId, and endpointId or provider are required' });
-   const effortConfig = effort || { mode: req.body.mode || 'passthrough', supported: req.body.supported || [] };
+   const effortConfig = effort || { mode: req.body.mode || 'forward', supported: req.body.supported || [] };
    if (variants) effortConfig.variants = variants;
    res.status(201).json(store.upsert('models', {
      id: modelId,
@@ -40,17 +40,23 @@ export function adminRouter(store) {
      strategy
    }));
  });
+ r.get('/routes', (_, res) => res.json(store.list('routes')));
+ r.post('/routes', (req, res) => {
+   const { id: routeId, endpointId, upstreamId, name, effort, provider, accountIds, enabled = true, strategy = 'round-robin', variants, sources } = req.body;
+   if (!routeId || !upstreamId || (!endpointId && !provider)) return res.status(400).json({ error: 'id, upstreamId, and endpointId or provider are required' });
+   const effortConfig = effort || { mode: req.body.mode || 'forward', supported: req.body.supported || [] };
+   if (variants) effortConfig.variants = variants;
+   res.status(201).json(store.upsert('routes', {
+     id: routeId, endpointId, upstreamId, provider, accountIds, name: name || routeId,
+     effort: effortConfig, variants: variants || effortConfig.variants,
+     sources: sources || (endpointId ? [{ type: 'endpoint', endpointId, upstreamId }] : [{ type: 'account', provider, upstreamId }]),
+     enabled, strategy
+   }));
+ });
  r.post('/routes/auto-map', (req, res, next) => {
    try {
-     const rawToClean = [
-       'gemini-3.8-flash-tiered', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high',
-       'gemini-3.7-flash-tiered', 'gemini-3.7-flash-low', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-high',
-       'gemini-3.6-flash-tiered', 'gemini-3.6-flash-low', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-high',
-       'claude-sonnet-4-6-thinking'
-     ];
-     for (const id of rawToClean) {
-       store.remove('models', id);
-     }
+     // Routes are a separate registry. Auto Map must never mutate account/endpoint model cards.
+
 
      const defaultRoutes = [
        {
@@ -157,9 +163,8 @@ export function adminRouter(store) {
          provider: 'openai',
          upstreamId: 'gpt-5.6-sol',
          effort: {
-           mode: 'passthrough',
-           default: 'medium',
-           supported: ['low', 'medium', 'high']
+           mode: 'forward',
+           supported: []
          },
          enabled: true,
          strategy: 'round-robin'
@@ -170,9 +175,8 @@ export function adminRouter(store) {
          provider: 'openai',
          upstreamId: 'gpt-5.6-terra',
          effort: {
-           mode: 'passthrough',
-           default: 'medium',
-           supported: ['low', 'medium', 'high']
+           mode: 'forward',
+           supported: []
          },
          enabled: true,
          strategy: 'round-robin'
@@ -183,9 +187,8 @@ export function adminRouter(store) {
          provider: 'openai',
          upstreamId: 'gpt-5.6-luna',
          effort: {
-           mode: 'passthrough',
-           default: 'medium',
-           supported: ['low', 'medium', 'high']
+           mode: 'forward',
+           supported: []
          },
          enabled: true,
          strategy: 'round-robin'
@@ -196,9 +199,8 @@ export function adminRouter(store) {
          provider: 'openai',
          upstreamId: 'gpt-6-astra',
          effort: {
-           mode: 'passthrough',
-           default: 'medium',
-           supported: ['light', 'medium', 'high', 'extra_high', 'ultra']
+           mode: 'forward',
+           supported: []
          },
          enabled: true,
          strategy: 'round-robin'
@@ -206,11 +208,13 @@ export function adminRouter(store) {
      ];
 
      for (const route of defaultRoutes) {
-       store.upsert('models', route);
+       store.upsert('routes', route);
      }
-     res.json({ ok: true, count: defaultRoutes.length, models: store.list('models') });
+     res.json({ ok: true, count: defaultRoutes.length, routes: store.list('routes') });
    } catch (e) { next(e); }
  });
+ r.patch('/routes/:id', (req,res) => { const old = store.list('routes').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); res.json(store.upsert('routes', { ...old, ...req.body, id: old.id })); });
+ r.delete('/routes/:id', (req,res) => res.sendStatus(store.remove('routes', req.params.id) ? 204 : 404));
  r.patch('/models/:id', (req,res) => { const old = store.list('models').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); res.json(store.upsert('models', { ...old, ...req.body, id: old.id })); });
  r.delete('/models/:id', (req,res) => res.sendStatus(store.remove('models', req.params.id) ? 204 : 404));
  r.get('/accounts', (req,res) => res.json(store.list('accounts').filter(x => !req.query.provider || x.provider === req.query.provider).map(safeAccount)));
@@ -338,7 +342,7 @@ export function adminRouter(store) {
        sources: [{ type: 'endpoint', endpointId: endpoint.id, upstreamId: trimmedUpId }],
        enabled: true,
        strategy: 'round-robin',
-       effort: { mode: 'passthrough', supported: [] }
+       effort: { mode: 'forward', supported: [] }
      }));
    } catch (e) { next(e); }
  });

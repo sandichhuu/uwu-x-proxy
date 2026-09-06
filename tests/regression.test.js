@@ -10,12 +10,12 @@ import { effortFrom, anthropicToOpenAI, openAIToAnthropic } from '../src/core/pr
 import { createDshIntegration, inspect } from '../src/api/integrations.js';
 import { Store } from '../src/storage/store.js';
 import { assertSafeUrl, safeFetch, isPrivateAddress } from '../src/security/network.js';
-import { calculateQuotaPercent } from '../public/model-dict.js';
+import { accountModelCards, calculateQuotaPercent } from '../public/model-dict.js';
 process.env.NODE_ENV = 'test';
 const { createApp } = await import('../src/index.js');
 function memory() {
   return {
-    data: { settings: { proxyKey: 'proxy' }, endpoints: [], models: [], accounts: [], requests: [] },
+    data: { settings: { proxyKey: 'proxy' }, endpoints: [], models: [], routes: [], accounts: [], requests: [] },
     list(k) { return this.data[k] || []; },
     record(r) { this.data.requests.push(r); },
     upsert(k, v) {
@@ -45,8 +45,9 @@ test('effort defaults resolve variants and reject unsupported/conflicting values
   assert.equal(resolveModel(store, 'public').upstreamId, 'raw-medium');
   assert.throws(() => resolveModel(store, 'public', 'high'), { status: 400 });
   assert.throws(() => effortFrom({ reasoning_effort: 'low', reasoning: { effort: 'high' } }), { status: 400 });
-  store.data.models[0].effort = { mode: 'passthrough', supported: ['high'] };
-  assert.throws(() => resolveModel(store, 'public', 'low'), { status: 400 });
+  store.data.models[0].effort = { mode: 'forward', supported: ['high'], default: 'high' };
+  assert.equal(resolveModel(store, 'public', 'low').effort, 'low');
+  assert.equal(resolveModel(store, 'public').effort, undefined);
   store.data.endpoints[0].enabled = false;
   assert.throws(() => resolveModel(store, 'public', 'high'), { status: 503 });
 });
@@ -130,7 +131,7 @@ test('aliases, native Responses route and effort forwarding', async t => {
   for (const prefix of ['', '/v1']) {
     const res = await post(prefix + '/responses', { model: 'public', input: 'hi' });
     assert.equal(res.status, 200); assert.equal((await res.json()).object, 'response');
-    assert.equal(seen.at(-1).url, '/v1/responses'); assert.equal(seen.at(-1).body.reasoning.effort, 'high');
+    assert.equal(seen.at(-1).url, '/v1/responses'); assert.equal(seen.at(-1).body.reasoning, undefined);
     const chat = await post(prefix + '/chat/completions', { model: 'public', messages: [{ role: 'user', content: 'hi' }] });
     assert.equal((await chat.json()).model, 'public');
   }
@@ -563,36 +564,37 @@ test('Google Antigravity discoverGoogle exposes only gemini-3.6-flash-*, gemini-
   assert.equal(models.some(m => m.id === 'gpt-oss-120b-medium'), false);
 });
 
-test('GPT-6 Astra reasoning effort normalization supports both Astra and standard OpenAI efforts in resolveModel', () => {
+test('forward mode preserves reasoning effort exactly without aliases, validation, or defaults', () => {
   const store = memory();
   store.data.accounts.push({ id: 'acc_oai', provider: 'openai', enabled: true });
   store.data.models.push({
     id: 'gpt-6-astra',
     upstreamId: 'gpt-6-astra',
     provider: 'openai',
-    effort: {
-      mode: 'passthrough',
-      supported: ['light', 'medium', 'high', 'extra_high', 'ultra'],
-      default: 'medium'
-    },
+    effort: { mode: 'forward', supported: ['light'], default: 'medium' },
     enabled: true
   });
 
-  // Native Astra levels
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'light').effort, 'light');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'medium').effort, 'medium');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'high').effort, 'high');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'extra_high').effort, 'extra_high');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'ultra').effort, 'ultra');
+  for (const effort of ['light', 'low', 'minimal', 'xhigh', 'max', 'vendor-future-level']) {
+    assert.equal(resolveModel(store, 'gpt-6-astra', effort).effort, effort);
+  }
+  assert.equal(resolveModel(store, 'gpt-6-astra').effort, undefined);
+});
 
-  // Standard / aliased effort normalization
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'low').effort, 'light');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'minimal').effort, 'light');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'xhigh').effort, 'extra_high');
-  assert.equal(resolveModel(store, 'gpt-6-astra', 'max').effort, 'ultra');
-
-  // Invalid effort
-  assert.throws(() => resolveModel(store, 'gpt-6-astra', 'invalid_effort'), { status: 400 });
+test('account cards use one-to-one names and never group Google effort variants', () => {
+  const cards = accountModelCards([
+    { id: 'gemini-3.8-flash-medium-low' },
+    { id: 'gemini-3.8-flash-medium' },
+    { id: 'gemini-3.8-flash-high' },
+    { id: 'gemini-3.8-flash-tiered' }
+  ], 'google');
+  assert.deepEqual(cards.map(x => [x.id, x.upstreamId]), [
+    ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium-low'],
+    ['gemini-3.8-flash-medium', 'gemini-3.8-flash-medium'],
+    ['gemini-3.8-flash-high', 'gemini-3.8-flash-high'],
+    ['gemini-3.8-flash-tiered', 'gemini-3.8-flash-tiered']
+  ]);
+  assert.ok(cards.every(x => x.effort.mode === 'forward'));
 });
 
 test('Add Account popup modal frontend assets and styling contracts', async t => {
@@ -750,8 +752,11 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   // Quota is refreshed automatically on every tab click without null check
   assert.doesNotMatch(appJs, /if\s*\(calculateQuotaPercent\(r\)\s*===\s*null\)/);
   assert.match(appJs, /Auto-refresh quota from upstream every time the tab is clicked/);
-  // Google discovery groups flash variants into single public models
-  assert.match(appJs, /Group Google effort variants into single public models/);
+  // Accounts keep one model card per discovered model; grouping belongs to API Routes.
+  assert.match(appJs, /accountModelCards\(data\.models, provider\)/);
+  // Models is preview-only: no activation toggle or strategy editor in its panel.
+  const modelsPanelSource = appJs.slice(appJs.indexOf('function modelsPanel'), appJs.indexOf('async function page'));
+  assert.doesNotMatch(modelsPanelSource, /toggleSwitch|select\.onchange|method:\s*'PATCH'/);
 
   const routesJs = fs.readFileSync(path.join(process.cwd(), 'public', 'routes.js'), 'utf8');
   assert.match(routesJs, /export function routesPanel/);
@@ -771,6 +776,14 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
     { id: 'google_acc', provider: 'google', email: 'test@gmail.com', enabled: true, quota: { remainingFraction: 1 } },
     { id: 'openai_acc', provider: 'openai', email: 'test@openai.com', enabled: true, quota: { remaining: 100 } }
   );
+  store.data.models.push(
+    { id: 'gemini-3.8-flash-low', provider: 'google', upstreamId: 'gemini-3.8-flash-medium-low', enabled: true },
+    { id: 'gemini-3.8-flash-medium', provider: 'google', upstreamId: 'gemini-3.8-flash-medium', enabled: true },
+    { id: 'unrelated-account-card', provider: 'google', upstreamId: 'do-not-touch', enabled: false }
+  );
+  const modelsBeforeAutoMap = structuredClone(store.data.models);
+  const accountsBeforeAutoMap = structuredClone(store.data.accounts);
+  const endpointsBeforeAutoMap = structuredClone(store.data.endpoints);
   const base = await listen(t, createApp(store));
   const post = (route, body = {}) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -779,11 +792,16 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   const autoMapData = await autoMapRes.json();
   assert.equal(autoMapData.ok, true);
   assert.ok(autoMapData.count >= 8);
+  assert.deepEqual(store.data.models, modelsBeforeAutoMap, 'Auto Map must not mutate Models/Accounts cards');
+  assert.deepEqual(store.data.accounts, accountsBeforeAutoMap, 'Auto Map must not mutate Accounts');
+  assert.deepEqual(store.data.endpoints, endpointsBeforeAutoMap, 'Auto Map must not mutate API Endpoints');
+  assert.equal((await (await fetch(`${base}/admin/api/models`)).json()).length, modelsBeforeAutoMap.length);
+  assert.equal((await (await fetch(`${base}/admin/api/routes`)).json()).length, autoMapData.count);
 
   // 3. Verify gemini-3.8-flash default mapping:
   // 4 models: gemini-3.8-flash-tiered, gemini-3.8-flash-low, gemini-3.8-flash-medium, gemini-3.8-flash-high
   // -> maps to 1 model gemini-3.8-flash with efforts: low, medium, high, xhigh
-  const flash38 = store.data.models.find(m => m.id === 'gemini-3.8-flash');
+  const flash38 = store.data.routes.find(m => m.id === 'gemini-3.8-flash');
   assert.ok(flash38);
   assert.equal(flash38.effort.mode, 'variant');
   assert.deepEqual(flash38.effort.supported, ['low', 'medium', 'high', 'xhigh']);
@@ -804,7 +822,7 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
 
   // 5. Test forward mode:
   // Forward mode forwards effort to the upstream provider unchanged
-  const gptSol = store.data.models.find(m => m.id === 'gpt-5.6-sol');
+  const gptSol = store.data.routes.find(m => m.id === 'gpt-5.6-sol');
   assert.ok(gptSol);
   const resolvedSol = resolveModel(store, 'gpt-5.6-sol', 'high');
   assert.equal(resolvedSol.upstreamId, 'gpt-5.6-sol');

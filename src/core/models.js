@@ -40,35 +40,26 @@ export function getAccountRemainingQuota(account, upstreamId) {
   return 50;
 }
 
-const ASTRA_EFFORT_MAP = {
-  minimal: 'light',
-  low: 'light',
-  light: 'light',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'extra_high',
-  extrahigh: 'extra_high',
-  extra_high: 'extra_high',
-  max: 'ultra',
-  ultra: 'ultra'
-};
-
 export function resolveModel(store, publicId, effort) {
   if (typeof publicId !== 'string' || !publicId) throw bad('model is required');
-  const model = store.list('models').find(x => x.id === publicId && x.enabled !== false);
+  // API Routes and model cards are independent registries. Prefer a public route,
+  // while retaining direct model-card lookup for backward compatibility.
+  const model = store.list('routes').find(x => x.id === publicId && x.enabled !== false)
+    || store.list('models').find(x => x.id === publicId && x.enabled !== false);
   if (!model) throw Object.assign(new Error('Unknown model'), { status: 404 });
   const config = model.effort || { mode: 'unsupported' };
-  let resolved = effort ?? config.default;
-  let upstreamId = model.upstreamId;
   const isVariant = config.mode === 'variant';
   const isForward = config.mode === 'forward' || config.mode === 'passthrough';
+  // Variant routes may choose a default because effort selects a concrete card.
+  // Forward routes must preserve the client's value exactly, including absence.
+  let resolved = effort ?? (isVariant ? config.default : undefined);
+  let upstreamId = model.upstreamId;
   if (resolved !== undefined) {
     if (typeof resolved !== 'string' || !resolved || (!isVariant && !isForward)) throw bad('Unsupported reasoning effort');
-    if (config.supported?.includes('light') && config.supported?.includes('ultra') && ASTRA_EFFORT_MAP[resolved.toLowerCase()]) {
-      resolved = ASTRA_EFFORT_MAP[resolved.toLowerCase()];
+    if (isVariant) {
+      const supportedList = config.supported?.length ? config.supported : Object.keys(config.variants || model.variants || {});
+      if (supportedList.length && !supportedList.includes(resolved)) throw bad(`Unsupported effort. Valid values: ${supportedList.join(', ')}`);
     }
-    const supportedList = config.supported?.length ? config.supported : (isVariant ? Object.keys(config.variants || model.variants || {}) : []);
-    if (supportedList.length && !supportedList.includes(resolved)) throw bad(`Unsupported effort. Valid values: ${supportedList.join(', ')}`);
   }
   if (isVariant) {
     const variantMap = config.variants || model.variants || {};

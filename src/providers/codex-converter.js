@@ -25,8 +25,13 @@ export function responsesToAnthropic(response, publicModel) {
 }
 export async function readCompletedResponse(upstream) {
   const decoder = new TextDecoder(); let buffer = '', completed;
-  for await (const chunk of upstream.body) { buffer += decoder.decode(chunk, { stream: true }); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) if (line.startsWith('data:')) { try { const event = JSON.parse(line.slice(5)); if (event.type === 'response.completed') completed = event.response; } catch {} } }
-  if (!completed) throw new Error('Codex stream ended without response.completed'); return completed;
+  // This Responses API revision sends an empty output array on
+  // response.completed; the finished items arrive via output_item.done.
+  const items = [];
+  for await (const chunk of upstream.body) { buffer += decoder.decode(chunk, { stream: true }); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) if (line.startsWith('data:')) { try { const event = JSON.parse(line.slice(5)); if (event.type === 'response.output_item.done' && event.item) items[event.output_index ?? items.length] = event.item; if (event.type === 'response.completed') completed = event.response; } catch {} } }
+  if (!completed) throw new Error('Codex stream ended without response.completed');
+  if ((!completed.output?.length) && items.some(Boolean)) completed = { ...completed, output: items.filter(Boolean) };
+  return completed;
 }
 
 export async function streamCodexToAnthropic(upstream, res, publicModel, signal) {

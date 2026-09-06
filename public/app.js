@@ -2,7 +2,7 @@ import { openAddAccountModal, oauthPanel } from './oauth.js';
 import { endpointsPanel } from './endpoints.js';
 import { routesPanel } from './routes.js';
 import { trendChart, distributionChart, COLORS } from './charts.js';
-import { toggleSwitch, calculateQuotaPercent, renderQuotaBadge, renderModelDictionary } from './model-dict.js';
+import { toggleSwitch, calculateQuotaPercent, renderQuotaBadge, renderModelDictionary, accountModelCards } from './model-dict.js';
 const content = document.querySelector('#content'), title = document.querySelector('#title');
 const descriptions = {
   analytics: 'A little clarity on everything flowing through your proxy.',
@@ -204,78 +204,11 @@ function accounts(root) {
                 if (found && found.quota) {
                   fetchAccount.quota = found.quota;
                 }
-                // Group Google effort variants into single public models
-                return [
-                  {
-                    id: 'gemini-3.8-flash',
-                    name: 'Gemini 3.8 Flash',
-                    upstreamId: 'gemini-3.8-flash-medium',
-                    effort: {
-                      mode: 'variant',
-                      default: 'medium',
-                      supported: ['low', 'medium', 'high', 'xhigh'],
-                      variants: {
-                        low: 'gemini-3.8-flash-low',
-                        medium: 'gemini-3.8-flash-medium',
-                        high: 'gemini-3.8-flash-high',
-                        xhigh: 'gemini-3.8-flash-tiered'
-                      }
-                    }
-                  },
-                  {
-                    id: 'gemini-3.7-flash',
-                    name: 'Gemini 3.7 Flash',
-                    upstreamId: 'gemini-3.7-flash-medium',
-                    effort: {
-                      mode: 'variant',
-                      default: 'medium',
-                      supported: ['low', 'medium', 'high', 'xhigh'],
-                      variants: {
-                        low: 'gemini-3.7-flash-low',
-                        medium: 'gemini-3.7-flash-medium',
-                        high: 'gemini-3.7-flash-high',
-                        xhigh: 'gemini-3.7-flash-tiered'
-                      }
-                    }
-                  },
-                  {
-                    id: 'gemini-3.6-flash',
-                    name: 'Gemini 3.6 Flash',
-                    upstreamId: 'gemini-3.6-flash-medium',
-                    effort: {
-                      mode: 'variant',
-                      default: 'medium',
-                      supported: ['low', 'medium', 'high', 'xhigh'],
-                      variants: {
-                        low: 'gemini-3.6-flash-low',
-                        medium: 'gemini-3.6-flash-medium',
-                        high: 'gemini-3.6-flash-high',
-                        xhigh: 'gemini-3.6-flash-tiered'
-                      }
-                    }
-                  },
-                  {
-                    id: 'claude-sonnet-4-6',
-                    name: 'Claude Sonnet 4.6',
-                    upstreamId: 'claude-sonnet-4-6',
-                    effort: {
-                      mode: 'variant',
-                      default: 'medium',
-                      supported: ['low', 'medium', 'high'],
-                      variants: {
-                        low: 'claude-sonnet-4-6',
-                        medium: 'claude-sonnet-4-6',
-                        high: 'claude-sonnet-4-6-thinking'
-                      }
-                    }
-                  },
-                  {
-                    id: 'claude-opus-4-6-thinking',
-                    name: 'Claude Opus 4.6 (Thinking)',
-                    upstreamId: 'claude-opus-4-6-thinking',
-                    effort: { mode: 'passthrough', supported: [] }
-                  }
-                ];
+                // Accounts are a one-to-one model-card dictionary. Effort grouping belongs
+                // exclusively to API Routes, not model discovery. Antigravity sometimes
+                // exposes the low card with a redundant "medium" segment; keep the exact
+                // upstream ID as the value while presenting the canonical public card name.
+                return accountModelCards(data.models, provider);
               }
               return data.models || [];
             }
@@ -359,37 +292,12 @@ function modelsPanel(root, data) {
     const isEnabled = m.enabled !== false;
     const cardEl = el('div', undefined, grid, `model-card${isEnabled ? '' : ' disabled'}`);
 
-    // Card Header: Title & Toggle Switch
+    // Read-only card header. Model activation and routing are managed in API Routes.
     const cardHeader = el('div', undefined, cardEl, 'model-card-header');
     const titleBox = el('div', undefined, cardHeader);
     const title = el('h3', m.name || m.id, titleBox, 'model-card-title');
     title.title = m.name || m.id;
-
-    const badge = el('span', isEnabled ? 'Public & Active' : 'Disabled', titleBox, `pill ${isEnabled ? 'good' : 'error'}`);
-
-    const toggle = toggleSwitch({
-      checked: isEnabled,
-      ariaLabel: `Enable or disable model ${m.id}`,
-      label: isEnabled ? 'Enabled' : 'Disabled',
-      onChange: async (newChecked) => {
-        try {
-          await api(`models/${encodeURIComponent(m.id)}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ enabled: newChecked })
-          });
-          m.enabled = newChecked;
-          cardEl.classList.toggle('disabled', !newChecked);
-          badge.textContent = newChecked ? 'Public & Active' : 'Disabled';
-          badge.className = `pill ${newChecked ? 'good' : 'error'}`;
-          const labelEl = toggle.querySelector('.toggle-label');
-          if (labelEl) labelEl.textContent = newChecked ? 'Enabled' : 'Disabled';
-        } catch (e) {
-          error(cardEl, e);
-          throw e;
-        }
-      }
-    });
-    cardHeader.appendChild(toggle);
+    el('span', isEnabled ? 'Public & Active' : 'Disabled', titleBox, `pill ${isEnabled ? 'good' : 'error'}`);
 
     // Badges / Tags
     const badges = el('div', undefined, cardEl, 'model-badges');
@@ -423,45 +331,7 @@ function modelsPanel(root, data) {
       el('span', epDisplay, rowEp, 'model-meta-val');
     }
 
-    // Execution Strategy
-    const stratBox = el('div', undefined, cardEl, 'model-strategy-box');
-    const stratLabel = el('label', 'Execution Strategy', stratBox);
-    stratLabel.setAttribute('for', `strategy-${m.id}`);
-
-    const select = el('select', undefined, stratBox, 'strategy-select');
-    select.id = `strategy-${m.id}`;
-    select.setAttribute('aria-label', `Execution strategy for ${m.id}`);
-
-    const optRR = el('option', '🔄 Round-Robin (Sequential)', select);
-    optRR.value = 'round-robin';
-
-    const optSmart = el('option', '[auto] Smart (Highest remaining usage)', select);
-    optSmart.value = 'smart';
-
-    const currentStrategy = m.strategy || m.routingStrategy || 'round-robin';
-    select.value = currentStrategy;
-
-    const savedFeedback = el('div', undefined, stratBox, 'strategy-saved');
-    el('small', 'Only enabled accounts and endpoints are routed to.', stratBox, 'muted');
-
-    select.onchange = async () => {
-      select.disabled = true;
-      try {
-        await api(`models/${encodeURIComponent(m.id)}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ strategy: select.value })
-        });
-        m.strategy = select.value;
-        savedFeedback.textContent = `[ok] Strategy set to ${select.value === 'smart' ? 'Smart' : 'Round-Robin'}`;
-        savedFeedback.style.display = 'block';
-        setTimeout(() => { if (savedFeedback.isConnected) savedFeedback.style.display = 'none'; }, 3000);
-      } catch (e) {
-        error(stratBox, e);
-        select.value = m.strategy || 'round-robin';
-      } finally {
-        select.disabled = false;
-      }
-    };
+    // This tab is intentionally preview-only; edit routes in API Routes.
   }
 }
 async function page(name) {

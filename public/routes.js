@@ -43,7 +43,7 @@ export function routesPanel(parent, { api, el, error }) {
   const modeSelect = el('select', undefined, wrapMode);
   const optMap = el('option', 'Map Model + Effort (Strip reasoning effort)', modeSelect);
   optMap.value = 'variant';
-  const optFwd = el('option', 'Forward As-Is (Pass client request unchanged to upstream)', modeSelect);
+  const optFwd = el('option', 'Forward (Map model name; preserve reasoning effort)', modeSelect);
   optFwd.value = 'forward';
 
   const wrapProv = el('label', 'Target Provider / Source', form);
@@ -78,7 +78,7 @@ export function routesPanel(parent, { api, el, error }) {
   async function loadRoutes() {
     try {
       const [allModels, endpoints] = await Promise.all([
-        api('models'),
+        api('routes'),
         api('endpoints').catch(() => [])
       ]);
       routes = allModels;
@@ -155,7 +155,7 @@ export function routesPanel(parent, { api, el, error }) {
         label: isEnabled ? 'Enabled' : 'Disabled',
         onChange: async (newChecked) => {
           try {
-            await api('models/' + encodeURIComponent(r.id), {
+            await api('routes/' + encodeURIComponent(r.id), {
               method: 'PATCH',
               body: JSON.stringify({ enabled: newChecked })
             });
@@ -205,7 +205,7 @@ export function routesPanel(parent, { api, el, error }) {
         if (!confirm('Are you sure you want to delete route "' + r.id + '"?')) return;
         deleteBtn.disabled = true;
         try {
-          await api('models/' + encodeURIComponent(r.id), { method: 'DELETE' });
+          await api('routes/' + encodeURIComponent(r.id), { method: 'DELETE' });
           const idx = routes.indexOf(r);
           if (idx >= 0) routes.splice(idx, 1);
           if (selectedRoute && selectedRoute.id === r.id) {
@@ -238,7 +238,7 @@ export function routesPanel(parent, { api, el, error }) {
 
     const subText = isVariant
       ? 'Grouped models by effort. Incoming requests with an effort level are routed to the corresponding model with effort parameter stripped (none).'
-      : 'Forward mode. Client API requests (model, reasoning_effort, temperature, etc.) are passed directly to the upstream endpoint.';
+      : 'Forward mode. The model name is mapped to one existing model card. Reasoning effort is forwarded unchanged and is never defaulted, normalized, or filtered.';
     el('p', subText, titles, 'muted');
 
     const actions = el('div', undefined, head, 'dict-actions');
@@ -263,7 +263,7 @@ export function routesPanel(parent, { api, el, error }) {
         defSelect.disabled = true;
         try {
           selectedRoute.effort = { ...selectedRoute.effort, default: defSelect.value };
-          await api('models/' + encodeURIComponent(selectedRoute.id), {
+          await api('routes/' + encodeURIComponent(selectedRoute.id), {
             method: 'PATCH',
             body: JSON.stringify({ effort: selectedRoute.effort })
           });
@@ -295,7 +295,7 @@ export function routesPanel(parent, { api, el, error }) {
           variants: { ...variantMap }
         };
 
-        api('models/' + encodeURIComponent(selectedRoute.id), {
+        api('routes/' + encodeURIComponent(selectedRoute.id), {
           method: 'PATCH',
           body: JSON.stringify({
             effort: selectedRoute.effort,
@@ -346,7 +346,7 @@ export function routesPanel(parent, { api, el, error }) {
               selectedRoute.variants = { ...variantMap };
               selectedRoute.effort.variants = { ...variantMap };
               selectedRoute.effort.supported = Object.keys(variantMap);
-              await api('models/' + encodeURIComponent(selectedRoute.id), {
+              await api('routes/' + encodeURIComponent(selectedRoute.id), {
                 method: 'PATCH',
                 body: JSON.stringify({
                   effort: selectedRoute.effort,
@@ -382,7 +382,7 @@ export function routesPanel(parent, { api, el, error }) {
           selectedRoute.variants = { ...variantMap };
           selectedRoute.effort.variants = { ...variantMap };
           try {
-            await api('models/' + encodeURIComponent(selectedRoute.id), {
+            await api('routes/' + encodeURIComponent(selectedRoute.id), {
               method: 'PATCH',
               body: JSON.stringify({
                 effort: selectedRoute.effort,
@@ -410,7 +410,7 @@ export function routesPanel(parent, { api, el, error }) {
           selectedRoute.effort.variants = { ...variantMap };
           selectedRoute.effort.supported = Object.keys(variantMap);
           try {
-            await api('models/' + encodeURIComponent(selectedRoute.id), {
+            await api('routes/' + encodeURIComponent(selectedRoute.id), {
               method: 'PATCH',
               body: JSON.stringify({
                 effort: selectedRoute.effort,
@@ -428,7 +428,7 @@ export function routesPanel(parent, { api, el, error }) {
       // Forward Mode Panel
       const fwdBox = el('div', undefined, section, 'route-forward-section');
       el('h4', 'Forward Mode Configuration', fwdBox);
-      el('p', 'Client API requests (model, reasoning_effort, temperature, stream, messages, etc.) are forwarded directly and unchanged to the upstream endpoint.', fwdBox, 'muted');
+      el('p', 'The public model name is mapped to the target model card. All client options, including reasoning_effort, are forwarded unchanged.', fwdBox, 'muted');
 
       const metaRow = el('div', undefined, fwdBox, 'model-meta-row');
       el('span', 'Target Upstream Model', metaRow);
@@ -478,12 +478,11 @@ export function routesPanel(parent, { api, el, error }) {
       } else {
         effortConfig = {
           mode: 'forward',
-          default: 'medium',
-          supported: ['low', 'medium', 'high']
+          supported: []
         };
       }
 
-      await api('models', {
+      await api('routes', {
         method: 'POST',
         body: JSON.stringify({
           id: publicId,
@@ -539,7 +538,7 @@ export function routesPanel(parent, { api, el, error }) {
     try {
       for (const r of [...routes]) {
         try {
-          await api('models/' + encodeURIComponent(r.id), { method: 'DELETE' });
+          await api('routes/' + encodeURIComponent(r.id), { method: 'DELETE' });
         } catch (e) {}
       }
       routes = [];
