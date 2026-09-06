@@ -23,13 +23,11 @@ export function getAccountRemainingQuota(account, upstreamId) {
       const frac = q[upstreamId].remainingFraction ?? (q[upstreamId].resetTime ? 0 : null);
       if (typeof frac === 'number') return Math.round(frac * 100);
     }
-    const entries = Object.entries(q);
+    // No per-model match: score by the most exhausted model so smart routing
+    // never prefers an account whose needed family is depleted. (Favoring one
+    // family here once hid fully-exhausted Gemini behind a fresh Claude.)
+    const entries = Object.entries(q.models || q);
     if (entries.length > 0) {
-      const claude = entries.find(([k]) => /claude/i.test(k));
-      if (claude && claude[1]) {
-        const frac = claude[1].remainingFraction ?? (claude[1].resetTime ? 0 : null);
-        if (typeof frac === 'number') return Math.round(frac * 100);
-      }
       const fractions = entries
         .map(([, info]) => info?.remainingFraction ?? (info?.resetTime ? 0 : null))
         .filter(f => typeof f === 'number');

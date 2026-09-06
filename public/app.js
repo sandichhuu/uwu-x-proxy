@@ -2,7 +2,7 @@ import { openAddAccountModal, oauthPanel } from './oauth.js';
 import { endpointsPanel } from './endpoints.js';
 import { routesPanel } from './routes.js';
 import { trendChart, distributionChart, COLORS } from './charts.js';
-import { toggleSwitch, calculateQuotaPercent, renderQuotaBadge, renderModelDictionary, accountModelCards } from './model-dict.js';
+import { toggleSwitch, calculateQuotaPercent, quotaBreakdown, familyQuota, familyQuotaAll, familySummary, codexQuota, resetCountdown, countdownFromSec, renderQuotaBadge, renderModelDictionary, accountModelCards } from './model-dict.js';
 const content = document.querySelector('#content'), title = document.querySelector('#title');
 const descriptions = {
   analytics: 'A little clarity on everything flowing through your proxy.',
@@ -15,6 +15,10 @@ const descriptions = {
 let currentPage = 'analytics', generation = 0, range = '24h';
 async function api(path, options = {}) {
   const response = await fetch('/admin/api/' + path, { ...options, headers: { 'content-type': 'application/json' } });
+  if (response.status === 204 || response.status === 205) {
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return null;
+  }
   let data;
   try { data = await response.json(); }
   catch { throw new Error(`Admin API ${path.split('?')[0]} returned non-JSON (HTTP ${response.status}). Restart x-proxy, reload the dashboard, and check that this URL points to x-proxy rather than a proxy/login page.`); }
@@ -30,19 +34,28 @@ function el(tag, text, parent, className) {
 function empty(parent, heading, detail) { const box = el('div', undefined, parent, 'empty'); el('strong', heading, box); el('span', detail, box); }
 function error(parent, e) { el('p', e.message, parent, 'error-message').setAttribute('role', 'alert'); }
 function card(parent, heading, note) { const box = el('section', undefined, parent, 'card'); el('h2', heading, box); if (note) el('p', note, box, 'muted'); return box; }
-function table(parent, columns, rows) {
+function table(parent, columns, rows, onRowClick) {
   if (!rows.length) return empty(parent, 'Nothing here yet', 'New activity will appear here when it is available.');
   const wrap = el('div', undefined, parent, 'table-wrap'), table = el('table', undefined, wrap);
   const head = el('tr', undefined, el('thead', undefined, table));
   for (const [label] of columns) el('th', label, head).scope = 'col';
   const body = el('tbody', undefined, table);
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     const tr = el('tr', undefined, body);
+    if (onRowClick) {
+      tr.style.cursor = 'pointer';
+      tr.title = 'Click to show family quota for this account';
+      tr.onclick = e => {
+        if (e.target.closest('button, a, input, select, label')) return;
+        onRowClick(row, tr, index);
+      };
+    }
     for (const [, value] of columns) {
       const td = el('td', undefined, tr), result = value(row);
       if (result instanceof Node) td.append(result); else td.textContent = result ?? '-';
     }
-  }
+  });
+  return table;
 }
 const number = value => Number(value || 0).toLocaleString();
 const enabled = row => el('span', row.enabled === false ? 'Disabled' : 'Enabled', null, `pill${row.enabled === false ? ' error' : ''}`);
@@ -112,11 +125,52 @@ function accounts(root) {
         const titleWrap = el('div', undefined, header);
         el('h2', `${tab} Accounts`, titleWrap);
 
-        const addAccountBtn = el('button', `+ Add Account`, header, 'primary sm');
+        const actions = el('div', undefined, header);
+        actions.style.display = 'flex'; actions.style.gap = '6px'; actions.style.alignItems = 'center';
+        const addAccountBtn = el('button', `+ Add Account`, actions, 'primary sm');
         addAccountBtn.onclick = () => openAddAccountModal(provider, {
           api, el, error,
           connected: () => { if (token === tabGeneration && root.isConnected) button.click(); }
         });
+
+        // Backup/restore: export all accounts to a portable JSON file,
+        // import it (or an ecosystem [{email, refresh_token}] file) back.
+        if (provider === 'google' || provider === 'openai') {
+          const exportBtn = el('button', 'Export', actions, 'sm');
+          exportBtn.title = `Download all ${tab} accounts as a JSON backup file`;
+          exportBtn.disabled = rows.length === 0;
+          exportBtn.onclick = async () => {
+            exportBtn.disabled = true;
+            try {
+              const response = await fetch(`/admin/api/accounts/${provider}/export`);
+              if (!response.ok) throw new Error(`Export failed (HTTP ${response.status})`);
+              const name = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || `uwu-x-proxy-${provider}-accounts.json`;
+              const url = URL.createObjectURL(await response.blob());
+              const link = document.createElement('a');
+              link.href = url; link.download = name;
+              document.body.append(link); link.click(); link.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 5000);
+            } catch (e) { error(panel, e); }
+            finally { exportBtn.disabled = rows.length === 0; }
+          };
+          const fileInput = document.createElement('input');
+          fileInput.type = 'file'; fileInput.accept = 'application/json,.json'; fileInput.hidden = true;
+          actions.append(fileInput);
+          const importBtn = el('button', 'Import', actions, 'sm');
+          importBtn.title = `Restore ${tab} accounts from a JSON backup file`;
+          importBtn.onclick = () => { fileInput.value = ''; fileInput.click(); };
+          fileInput.onchange = async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+            try {
+              const result = await api(`accounts/${provider}/import`, { method: 'POST', body: await file.text() });
+              const summary = [`Imported ${result.imported}`, `updated ${result.updated}`];
+              if (result.skipped?.length) summary.push(`skipped ${result.skipped.length} (${result.skipped.slice(0, 3).join('; ')})`);
+              el('p', `Import finished: ${summary.join(', ')}.`, panel, 'muted');
+              if (token === tabGeneration && root.isConnected) button.click();
+            } catch (e) { error(panel, e); }
+          };
+        }
 
         if (rows.length === 0) {
           const emptyBox = el('div', undefined, panel, 'empty');
@@ -129,7 +183,16 @@ function accounts(root) {
             connected: () => { if (token === tabGeneration && root.isConnected) button.click(); }
           });
         } else {
-          table(panel, [
+          // Click a row to inspect that account's family quota below
+          // (click again to return to All accounts).
+          let selectedAccountId = 'all', accountsTable = null;
+          const paintSelection = () => {
+            accountsTable?.querySelectorAll('tbody tr').forEach((tr, i) => {
+              tr.style.backgroundColor = rows[i] && rows[i].id === selectedAccountId ? '#fdf4ea' : '';
+            });
+          };
+          const selectedRows = () => selectedAccountId === 'all' ? rows : rows.filter(r => r.id === selectedAccountId);
+          accountsTable = table(panel, [
             ['Status', r => toggleSwitch({
               checked: r.enabled !== false,
               ariaLabel: `Enable or disable account ${r.email || r.name || r.id}`,
@@ -153,8 +216,11 @@ function accounts(root) {
                   const q = await api(`accounts/${provider}/${encodeURIComponent(r.id)}/quota`, { method: 'POST' });
                   r.quota = q.quota || q;
                   updateBadge();
+                  renderFamilyCards();
                 });
                 cellWrap.appendChild(badge);
+                const details = quotaBreakdown(r);
+                if (details) cellWrap.title = details;
               };
               updateBadge();
 
@@ -162,7 +228,7 @@ function accounts(root) {
               api(`accounts/${provider}/${encodeURIComponent(r.id)}/quota`, { method: 'POST' })
                 .then(q => {
                   r.quota = q.quota || q;
-                  if (token === tabGeneration && root.isConnected) updateBadge();
+                  if (token === tabGeneration && root.isConnected) { updateBadge(); renderFamilyCards(); }
                 })
                 .catch(() => {});
               return cellWrap;
@@ -183,7 +249,62 @@ function accounts(root) {
               };
               return delBtn;
             }]
-          ], rows);
+          ], rows, row => {
+            selectedAccountId = selectedAccountId === row.id ? 'all' : row.id;
+            paintSelection();
+            renderFamilyCards();
+          });
+
+          // Quota by family (Antigravity-style): Weekly + Five Hour remaining
+          // per model family. Click a table row above to inspect one account;
+          // Google exposes a single quota window per model, so its Five Hour
+          // row is N/A; Codex accounts carry both windows.
+          const quotaSection = el('section', undefined, panel, 'dict-section');
+          const quotaHead = el('div', undefined, quotaSection, 'dict-header');
+          const quotaTitles = el('div', undefined, quotaHead);
+          el('h3', provider === 'google' ? 'Quota by family' : 'GPT quota', quotaTitles);
+          const selectedAccountLabel = el('span', 'All accounts', quotaHead, 'muted');
+          const quotaGrid = el('div', undefined, quotaSection, 'stats');
+          quotaGrid.style.gridTemplateColumns = 'repeat(2,minmax(0,1fr))';
+          const pillFor = pct => pct === null || pct === undefined ? 'pill muted-pill' : pct <= 20 ? 'pill error' : pct <= 50 ? 'pill warning' : 'pill good';
+          const renderFamilyCards = () => {
+            if (token !== tabGeneration || !root.isConnected) return;
+            const current = rows.find(r => r.id === selectedAccountId);
+            selectedAccountLabel.textContent = current ? current.email || current.name || current.id : 'All accounts';
+            quotaGrid.replaceChildren();
+            const viewingAll = selectedAccountId === 'all';
+            const withCounts = (note, usable, total) => [note, viewingAll && total ? `${usable}/${total} usable` : null].filter(Boolean).join(' · ') || null;
+            const googleCard = (title, family) => {
+              const s = viewingAll ? familySummary(rows, family) : familySummary(selectedRows(), family);
+              return {
+                title,
+                weekly: s.weekly?.pct ?? null,
+                weeklyNote: withCounts(s.weekly?.reset ? resetCountdown(s.weekly.reset) : null, s.usableWeekly, s.total),
+                fiveHour: s.fiveHour?.pct ?? null,
+                fiveHourNote: s.fiveHour
+                  ? withCounts(s.fiveHour.reset ? resetCountdown(s.fiveHour.reset) : null, s.usableFiveHour, s.total)
+                  : (s.summarized ? 'No 5h bucket reported by upstream' : 'Refresh quotas to load 5h data')
+              };
+            };
+            const cards = provider === 'google'
+              ? [googleCard('Gemini Models', 'gemini'), googleCard('Claude Models', 'claude')]
+              : (() => {
+                const q = codexQuota(viewingAll ? rows : selectedRows());
+                return [{ title: 'GPT Models', weekly: q.weekly?.pct ?? null, weeklyNote: withCounts(q.weekly ? countdownFromSec(q.weekly.resetAfterSec) : null, q.usableWeekly, q.total), fiveHour: q.fiveHour?.pct ?? null, fiveHourNote: withCounts(q.fiveHour ? countdownFromSec(q.fiveHour.resetAfterSec) : null, q.usableFiveHour, q.total) }];
+              })();
+            for (const c of cards) {
+              const cardEl = el('section', undefined, quotaGrid, 'card');
+              el('h3', c.title, cardEl).style.marginTop = '0';
+              for (const [label, pct, note] of [['Weekly Limit Remaining', c.weekly, c.weeklyNote], ['Five Hour Limit Remaining', c.fiveHour, c.fiveHourNote]]) {
+                el('span', label, cardEl, 'stat-label').style.display = 'block';
+                const line = el('div', undefined, cardEl);
+                line.style.margin = '2px 0 10px';
+                el('span', pct === null || pct === undefined ? 'N/A' : `${pct}%`, line, pillFor(pct));
+                if (note) el('span', ` ${note}`, line, 'muted');
+              }
+            }
+          };
+          renderFamilyCards();
 
           // Key-Value Model Dictionary Section
           // Fetch models using single account

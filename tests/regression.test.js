@@ -828,6 +828,11 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   const resolvedSol = resolveModel(store, 'gpt-5.6-sol', 'high');
   assert.equal(resolvedSol.upstreamId, 'gpt-5.6-sol');
   assert.equal(resolvedSol.effort, 'high');
+
+  // 6. Test deleting route returns 204 and app.js handles 204 without throwing non-JSON error
+  assert.match(appJs, /response\.status === 204/);
+  const deleteRes = await fetch(`${base}/admin/api/routes/gpt-6-astra`, { method: 'DELETE' });
+  assert.equal(deleteRes.status, 204);
 });
 
 

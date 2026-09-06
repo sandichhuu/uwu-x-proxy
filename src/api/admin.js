@@ -8,6 +8,7 @@ import { discoverEndpoint, endpointHeaders } from '../providers/api-endpoint.js'
 import { validAccessToken } from '../auth/oauth.js';
 import { createOAuthFlows } from '../auth/flows.js';
 import { discoverGoogle } from '../providers/google-antigravity.js';
+import { buildAccountExport, normalizeAccountImport, findImportTarget, TRANSFERABLE_PROVIDERS } from '../auth/account-transfer.js';
 import { discoverOpenAI, quotaOpenAI } from '../providers/openai-codex.js';
 
 const safeAccount = ({ accessToken, refreshToken, idToken, ...account }) => account;
@@ -240,7 +241,39 @@ export function adminRouter(store) {
      }
    } catch(e) { next(e); }
  });
- r.get('/endpoints', (_, res) => res.json(store.list('endpoints').map(({ apiKey, ...safe }) => safe)));
+  r.get('/accounts/:provider/export', (req, res) => {
+    if (!TRANSFERABLE_PROVIDERS.includes(req.params.provider)) return res.status(400).json({ error: { message: 'Provider does not support transfer' } });
+    const payload = buildAccountExport(req.params.provider, store.list('accounts'));
+    res.set({ 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="uwu-x-proxy-${req.params.provider}-accounts-${new Date().toISOString().slice(0, 10)}.json"` });
+    res.send(JSON.stringify(payload, null, 2));
+  });
+  r.post('/accounts/:provider/import', (req, res) => {
+    if (!TRANSFERABLE_PROVIDERS.includes(req.params.provider)) return res.status(400).json({ error: { message: 'Provider does not support transfer' } });
+    const { entries, errors } = normalizeAccountImport(req.params.provider, req.body);
+    const skipped = [...errors];
+    let imported = 0, updated = 0;
+    for (const entry of entries) {
+      const old = findImportTarget(store.list('accounts'), req.params.provider, entry);
+      if (old) {
+        store.upsert('accounts', {
+          ...old,
+          refreshToken: entry.refreshToken,
+          ...(entry.accountId ? { accountId: entry.accountId } : {}),
+          ...(entry.projectId ? { projectId: entry.projectId } : {})
+        });
+        updated++;
+      } else {
+        store.upsert('accounts', {
+          id: id('account'), provider: req.params.provider, source: 'imported',
+          email: entry.email, accountId: entry.accountId, refreshToken: entry.refreshToken, projectId: entry.projectId,
+          enabled: entry.enabled, createdAt: new Date().toISOString()
+        });
+        imported++;
+      }
+    }
+    res.json({ imported, updated, skipped });
+  });
+  r.get('/endpoints', (_, res) => res.json(store.list('endpoints').map(({ apiKey, ...safe }) => safe)));
  r.post('/endpoints', async (req,res,next) => { try { const { name, baseUrl, protocol = 'openai', apiKey, headers, timeoutMs, enabled = true, allowPrivate = false } = req.body; if (!name || !baseUrl) return res.status(400).json({ error: 'name and baseUrl are required' }); const normalized = await assertSafeUrl(baseUrl, { allowPrivate }); const endpoint = { id: id('endpoint'), name, baseUrl: normalized, protocol, apiKey, headers: headers || {}, timeoutMs, enabled, allowPrivate }; validateEndpoint(endpoint); store.upsert('endpoints', endpoint); const { apiKey: _, ...safe } = endpoint; res.status(201).json(safe); } catch(e) { next(e); } });
  r.patch('/endpoints/:id', async (req,res,next) => { try { const old = store.list('endpoints').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); const updated = { ...old, ...req.body, id: old.id }; if (req.body.baseUrl) updated.baseUrl = await assertSafeUrl(req.body.baseUrl, { allowPrivate: updated.allowPrivate }); validateEndpoint(updated); store.upsert('endpoints', updated); const { apiKey, ...safe } = updated; res.json(safe); } catch(e) { next(e); } });
  r.delete('/endpoints/:id', (req, res) => {

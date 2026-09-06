@@ -86,7 +86,11 @@ export function calculateQuotaPercent(account) {
     }
   }
 
-  // Google Antigravity quota format (map of modelId -> quotaInfo)
+  // Google Antigravity quota format (map of modelId -> quotaInfo).
+  // An account is only as usable as its most exhausted model, so the
+  // account-level figure is the minimum across all known models. Picking a
+  // single family (e.g. Claude-first) hides exhaustion elsewhere: it once
+  // reported 100% while every Gemini variant sat at 0.
   if (account.provider === 'google' || typeof q === 'object') {
     if (typeof q.remainingFraction === 'number') {
       return Math.max(0, Math.min(100, Math.round(q.remainingFraction * 100)));
@@ -94,13 +98,6 @@ export function calculateQuotaPercent(account) {
     const modelMap = q.models || q;
     const entries = Object.entries(modelMap);
     if (entries.length > 0) {
-      // Prioritize Claude models if present
-      const claude = entries.find(([k]) => /claude/i.test(k));
-      if (claude && claude[1]) {
-        const frac = claude[1].remainingFraction ?? (claude[1].resetTime ? 0 : null);
-        if (typeof frac === 'number') return Math.max(0, Math.min(100, Math.round(frac * 100)));
-      }
-      // Otherwise check min fraction among valid models
       const fractions = entries
         .map(([, info]) => info?.remainingFraction ?? (info?.resetTime ? 0 : null))
         .filter(f => typeof f === 'number');
@@ -111,6 +108,140 @@ export function calculateQuotaPercent(account) {
   }
 
   return null;
+}
+
+// Per-model percentages for tooltips/diagnostics, e.g.
+// "gemini-3.8-flash-medium 0%, claude-sonnet-4-6 100%". Returns null when
+// the account carries no per-model quota map.
+export function quotaBreakdown(account) {
+  const q = account?.quota;
+  if (!q || typeof q !== 'object' || typeof q.remainingFraction === 'number') return null;
+  const modelMap = q.models || q;
+  const parts = Object.entries(modelMap)
+    .map(([id, info]) => {
+      const frac = info?.remainingFraction ?? (info?.resetTime ? 0 : null);
+      return typeof frac === 'number' ? `${id} ${Math.round(frac * 100)}%` : null;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+// Antigravity-style family quota: the weekly remaining of a model family is
+// the bottleneck across that family's models (and accounts). Google exposes
+// a single quota window per model, so there is no five-hour figure.
+export function familyQuota(accounts, family) {
+  const test = family === 'claude' ? /^claude/i : /^gemini/i;
+  let best = null;
+  for (const acc of accounts || []) {
+    const q = acc?.quota;
+    if (!q || typeof q !== 'object') continue;
+    for (const [id, info] of Object.entries(q.models || q)) {
+      if (!test.test(id)) continue;
+      const frac = info?.remainingFraction ?? (info?.resetTime ? 0 : null);
+      if (typeof frac !== 'number') continue;
+      if (!best || frac < best.frac) best = { frac, reset: info?.resetTime };
+    }
+  }
+  if (!best) return { weekly: null, weeklyReset: null };
+  return { weekly: Math.max(0, Math.min(100, Math.round(best.frac * 100))), weeklyReset: best.reset || null };
+}
+
+// Combined "All accounts" view: the proxy routes around depleted accounts,
+// so the headline is the BEST account's weekly figure, plus how many accounts
+// can still serve the family. Min-across-accounts here once reported 0% while
+// a healthy account sat at 72%.
+export function familyQuotaAll(accounts, family) {
+  const pool = (accounts || []).filter(a => a?.enabled !== false);
+  const per = pool.map(acc => ({ acc, ...familyQuota([acc], family) }));
+  const known = per.filter(p => p.weekly !== null);
+  if (!known.length) return { weekly: null, weeklyReset: null, usable: 0, total: pool.length };
+  const usable = known.filter(p => p.weekly > 0);
+  const best = (usable.length ? usable : known).reduce((a, b) => (a.weekly >= b.weekly ? a : b));
+  return { weekly: best.weekly, weeklyReset: best.weeklyReset, usable: usable.length, total: pool.length };
+}
+
+// Antigravity-style family summary from retrieveUserQuotaSummary groups:
+// { weekly: {pct, reset}|null, fiveHour: {pct, reset}|null, usableWeekly,
+//   usableFiveHour, total, summarized }. Falls back to the per-model quota map
+// (weekly only) for accounts refreshed before groups existed.
+export function familySummary(accounts, family) {
+  const groupTest = family === 'claude' ? /claude/i : /gemini/i;
+  const pool = (accounts || []).filter(a => a?.enabled !== false);
+  const collect = window => {
+    const cands = [];
+    for (const acc of pool) {
+      for (const g of acc.quotaGroups || []) {
+        if (!groupTest.test(g.displayName || '')) continue;
+        for (const b of g.buckets || []) {
+          const win = String(b.window || '').toLowerCase();
+          if (win !== window && !String(b.bucketId || '').toLowerCase().endsWith(`-${window}`)) continue;
+          if (typeof b.remainingFraction !== 'number') continue;
+          cands.push({ pct: Math.max(0, Math.min(100, Math.round(b.remainingFraction * 100))), reset: b.resetTime || null });
+        }
+      }
+    }
+    return cands;
+  };
+  const weeklies = collect('weekly'), fiveHours = collect('5h');
+  const bestOf = list => list.length ? list.reduce((a, b) => (a.pct >= b.pct ? a : b)) : null;
+  if (!weeklies.length && !fiveHours.length) {
+    const f = familyQuotaAll(accounts, family);
+    return { weekly: f.weekly !== null ? { pct: f.weekly, reset: f.weeklyReset } : null, fiveHour: null, usableWeekly: f.usable, usableFiveHour: 0, total: f.total, summarized: false };
+  }
+  const weekly = bestOf(weeklies), fiveHour = bestOf(fiveHours);
+  return {
+    weekly, fiveHour,
+    usableWeekly: weeklies.filter(c => c.pct > 0).length,
+    usableFiveHour: fiveHours.filter(c => c.pct > 0).length,
+    total: pool.length,
+    summarized: true
+  };
+}
+
+// Codex quota really has two windows: primary (~5h) and secondary (~1w).
+// Headlines are the best account's figure (requests route around depletion),
+// with usable/total counts for the combined view.
+export function codexQuota(accounts) {
+  const read = (acc, key) => {
+    const w = acc?.quota?.rate_limit?.[key];
+    if (!w || typeof w.used_percent !== 'number') return null;
+    if (key === 'primary_window' && acc.quota.rate_limit.limit_reached === true) {
+      return { pct: 0, resetAfterSec: w.reset_after_seconds };
+    }
+    return { pct: Math.max(0, Math.min(100, Math.round(100 - w.used_percent))), resetAfterSec: w.reset_after_seconds };
+  };
+  const pool = (accounts || []).filter(a => a?.provider === 'openai' && a?.enabled !== false);
+  const collect = key => pool.map(acc => read(acc, key)).filter(Boolean);
+  const fiveHours = collect('primary_window'), weeklies = collect('secondary_window');
+  const best = list => list.length ? list.reduce((a, b) => (a.pct >= b.pct ? a : b)) : null;
+  return {
+    fiveHour: best(fiveHours),
+    weekly: best(weeklies),
+    usableFiveHour: fiveHours.filter(w => w.pct > 0).length,
+    usableWeekly: weeklies.filter(w => w.pct > 0).length,
+    total: pool.length
+  };
+}
+
+// 'resets in 5d 4h' / 'resets in 3h 12m' / 'resets in 45m'. Null when unknown.
+export function resetCountdown(iso, now = Date.now()) {
+  const target = typeof iso === 'string' ? Date.parse(iso) : NaN;
+  if (Number.isNaN(target)) return null;
+  let sec = Math.max(0, Math.round((target - now) / 1000));
+  const days = Math.floor(sec / 86400); sec -= days * 86400;
+  const hours = Math.floor(sec / 3600); sec -= hours * 3600;
+  const minutes = Math.floor(sec / 60);
+  if (days > 0) return `resets in ${days}d ${hours}h`;
+  if (hours > 0) return `resets in ${hours}h ${minutes}m`;
+  return `resets in ${minutes}m`;
+}
+
+export function countdownFromSec(sec) {
+  if (typeof sec !== 'number' || Number.isNaN(sec) || sec < 0) return null;
+  const hours = Math.floor(sec / 3600), minutes = Math.floor((sec % 3600) / 60);
+  if (hours >= 24) return `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+  if (hours > 0) return `resets in ${hours}h ${minutes}m`;
+  return `resets in ${minutes}m`;
 }
 
 export function renderQuotaBadge(percent, el, onRefresh) {

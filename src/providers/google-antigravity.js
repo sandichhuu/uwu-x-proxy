@@ -141,6 +141,49 @@ export async function fetchAvailableModelsGoogle(token, projectId = null) {
   throw new Error('Failed to fetch available models from Google Antigravity endpoints');
 }
 
+const SUMMARY_ENDPOINTS = [
+  'https://daily-cloudcode-pa.sandbox.googleapis.com',
+  'https://daily-cloudcode-pa.googleapis.com',
+  'https://cloudcode-pa.googleapis.com'
+];
+
+// Grouped quota summary (weekly + 5h windows per model family), the same
+// source the Antigravity IDE displays. Best-effort: returns null on any
+// failure so discovery/quota refresh is never blocked by it.
+export async function fetchQuotaSummary(token, projectId = null) {
+  const headers = { Authorization: `Bearer ${token}`, ...ANTIGRAVITY_HEADERS };
+  const body = projectId ? { project: projectId } : {};
+  for (const endpoint of SUMMARY_ENDPOINTS) {
+    try {
+      const response = await fetch(`${endpoint}/v1internal:retrieveUserQuotaSummary`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (!Array.isArray(data.groups)) continue;
+      const groups = data.groups
+        .filter(g => g && Array.isArray(g.buckets))
+        .map(g => ({
+          displayName: g.displayName || '',
+          description: g.description || '',
+          buckets: g.buckets.map(b => ({
+            bucketId: b.bucketId || '',
+            window: b.window || '',
+            remainingFraction: typeof b.remainingFraction === 'number' ? b.remainingFraction : null,
+            resetTime: b.resetTime || null,
+            displayName: b.displayName || ''
+          }))
+        }));
+      return groups;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 export async function discoverGoogle(store, account) {
   const token = await validAccessToken(store, account);
   let projectId = account.projectId;
@@ -198,10 +241,19 @@ export async function discoverGoogle(store, account) {
   }
 
   const quotaMap = Object.fromEntries(models.map(x => [x.id, x.quota]));
+  // Grouped weekly + 5h summary (the Antigravity display source). Best-effort
+  // and never blocking: a failed fetch keeps the previous groups.
+  let quotaGroups;
+  try {
+    quotaGroups = await fetchQuotaSummary(token, projectId);
+  } catch (err) {
+    console.warn('fetchQuotaSummary failed, keeping previous groups:', err.message);
+  }
   store.upsert('accounts', {
     ...account,
     projectId,
     quota: quotaMap,
+    ...(quotaGroups ? { quotaGroups, quotaGroupsAt: new Date().toISOString() } : {}),
     lastDiscoveredAt: new Date().toISOString()
   });
 
