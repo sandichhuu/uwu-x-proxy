@@ -10,6 +10,7 @@ import { createOAuthFlows } from '../auth/flows.js';
 import { discoverGoogle } from '../providers/google-antigravity.js';
 import { buildAccountExport, normalizeAccountImport, findImportTarget, TRANSFERABLE_PROVIDERS } from '../auth/account-transfer.js';
 import { discoverOpenAI, quotaOpenAI } from '../providers/openai-codex.js';
+import { putCachedEndpointModels, getCachedEndpointModels, lookupCachedLimits, dropCachedEndpoint } from '../storage/endpoint-cache.js';
 
 const safeAccount = ({ accessToken, refreshToken, idToken, ...account }) => account;
 const normalizeRoutePrefix = (raw) => {
@@ -288,7 +289,9 @@ export function adminRouter(store) {
           sources: endpointIds.map(endpointId => ({ type: 'endpoint', endpointId, upstreamId: m.upstreamId })),
           effort: { mode: 'forward', supported: [] },
           enabled,
-          strategy
+          strategy,
+          ...(Number(m.contextWindow) > 0 ? { contextWindow: Math.floor(Number(m.contextWindow)) } : {}),
+          ...(Number(m.maxTokens) > 0 ? { maxTokens: Math.floor(Number(m.maxTokens)) } : {})
         });
         endpointCount++;
       }
@@ -362,9 +365,10 @@ export function adminRouter(store) {
  r.post('/endpoints', async (req,res,next) => { try { const { name, baseUrl, protocol = 'openai', apiKey, headers, timeoutMs, enabled = true, allowPrivate = false } = req.body; if (!name || !baseUrl) return res.status(400).json({ error: 'name and baseUrl are required' }); const normalized = await assertSafeUrl(baseUrl, { allowPrivate }); const endpoint = { id: id('endpoint'), name, baseUrl: normalized, protocol, apiKey, headers: headers || {}, timeoutMs, enabled, allowPrivate }; validateEndpoint(endpoint); store.upsert('endpoints', endpoint); const { apiKey: _, ...safe } = endpoint; res.status(201).json(safe); } catch(e) { next(e); } });
  r.patch('/endpoints/:id', async (req,res,next) => { try { const old = store.list('endpoints').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); const updated = { ...old, ...req.body, id: old.id }; if (req.body.baseUrl) updated.baseUrl = await assertSafeUrl(req.body.baseUrl, { allowPrivate: updated.allowPrivate }); validateEndpoint(updated); store.upsert('endpoints', updated); const { apiKey, ...safe } = updated; res.json(safe); } catch(e) { next(e); } });
  r.delete('/endpoints/:id', (req, res) => {
-   const epId = req.params.id;
-   const removed = store.remove('endpoints', epId);
-   if (!removed) return res.sendStatus(404);
+    const epId = req.params.id;
+    const removed = store.remove('endpoints', epId);
+    if (!removed) return res.sendStatus(404);
+    dropCachedEndpoint(store, epId);
    for (const m of store.list('models')) {
      let changed = false;
      if (m.sources) {
@@ -414,57 +418,81 @@ export function adminRouter(store) {
      res.sendStatus(204);
    } catch (e) { next(e); }
  });
- r.post('/endpoints/:id/models', (req, res, next) => {
-   try {
-     const endpoint = store.list('endpoints').find(e => e.id === req.params.id);
-     if (!endpoint) return res.sendStatus(404);
-     if (endpoint.protocol !== 'openai') return res.status(400).json({ error: { message: 'This import requires an OpenAI-compatible endpoint' } });
-     const { publicId, upstreamId } = req.body;
-     if (typeof publicId !== 'string' || !publicId.trim() || publicId.length > 256 || typeof upstreamId !== 'string' || !upstreamId.trim() || upstreamId.length > 256) {
-       return res.status(400).json({ error: { message: 'Valid publicId and upstreamId are required (max 256 characters)' } });
-     }
-     const trimmedPubId = publicId.trim();
-     const trimmedUpId = upstreamId.trim();
-     const existing = store.list('models').find(m => m.id === trimmedPubId);
-     if (existing) {
-       const isSameEndpoint = existing.endpointId === endpoint.id || existing.endpointIds?.includes(endpoint.id) || existing.sources?.some(s => s.endpointId === endpoint.id);
-       if (isSameEndpoint) {
-         const existingUpstream = existing.sources?.find(s => s.endpointId === endpoint.id)?.upstreamId || (existing.endpointId === endpoint.id ? existing.upstreamId : null);
-         if (existingUpstream && existingUpstream !== trimmedUpId) {
-           return res.status(409).json({ error: { message: 'Public model ID already exists. Choose another name.' } });
-         }
-         existing.enabled = true;
-         return res.json(store.upsert('models', existing));
-       }
-       if (!existing.sources) {
-         existing.sources = [];
-         if (existing.provider) {
-           existing.sources.push({ type: 'account', provider: existing.provider, accountIds: existing.accountIds || [], upstreamId: existing.upstreamId });
-         }
-         if (existing.endpointId) {
-           existing.sources.push({ type: 'endpoint', endpointId: existing.endpointId, upstreamId: existing.upstreamId });
-         }
-       }
-       existing.sources.push({ type: 'endpoint', endpointId: endpoint.id, upstreamId: trimmedUpId });
-       existing.endpointIds = Array.from(new Set([...(existing.endpointIds || (existing.endpointId ? [existing.endpointId] : [])), endpoint.id]));
-       if (!existing.endpointId) existing.endpointId = endpoint.id;
-       existing.enabled = true;
-       return res.status(201).json(store.upsert('models', existing));
-     }
-     res.status(201).json(store.upsert('models', {
-       id: trimmedPubId,
-       name: trimmedPubId,
-       endpointId: endpoint.id,
-       endpointIds: [endpoint.id],
-       upstreamId: trimmedUpId,
-       sources: [{ type: 'endpoint', endpointId: endpoint.id, upstreamId: trimmedUpId }],
-       enabled: true,
-       strategy: 'round-robin',
-       effort: { mode: 'forward', supported: [] }
-     }));
-   } catch (e) { next(e); }
- });
- r.post('/endpoints/:id/discover', async (req,res,next) => { try { const ep = store.list('endpoints').find(x => x.id === req.params.id); if (!ep) return res.sendStatus(404); res.json({ models: await discoverEndpoint(ep) }); } catch(e) { next(e); } });
+  r.post('/endpoints/:id/models', (req, res, next) => {
+    try {
+      const endpoint = store.list('endpoints').find(e => e.id === req.params.id);
+      if (!endpoint) return res.sendStatus(404);
+      if (endpoint.protocol !== 'openai') return res.status(400).json({ error: { message: 'This import requires an OpenAI-compatible endpoint' } });
+      const { publicId, upstreamId } = req.body;
+      if (typeof publicId !== 'string' || !publicId.trim() || publicId.length > 256 || typeof upstreamId !== 'string' || !upstreamId.trim() || upstreamId.length > 256) {
+        return res.status(400).json({ error: { message: 'Valid publicId and upstreamId are required (max 256 characters)' } });
+      }
+      const toLimit = v => {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return undefined;
+        return Math.floor(n);
+      };
+      // Accept canonical + OpenRouter-style aliases so discovered limits survive import.
+      // Missing values fall back to the fetch-time JSON cache (endpoint-cache).
+      let contextWindow = toLimit(req.body.contextWindow ?? req.body.windowContext ?? req.body.context_length ?? req.body.contextLength);
+      let maxTokens = toLimit(req.body.maxTokens ?? req.body.maxOutputTokens ?? req.body.max_completion_tokens ?? req.body.maxCompletionTokens);
+      if (contextWindow === undefined || maxTokens === undefined) {
+        const cached = lookupCachedLimits(store, endpoint.id, { upstreamId: upstreamId.trim(), publicId: publicId.trim() });
+        if (cached) {
+          if (contextWindow === undefined && cached.contextWindow !== undefined) contextWindow = cached.contextWindow;
+          if (maxTokens === undefined && cached.maxTokens !== undefined) maxTokens = cached.maxTokens;
+        }
+      }
+      const trimmedPubId = publicId.trim();
+      const trimmedUpId = upstreamId.trim();
+      const existing = store.list('models').find(m => m.id === trimmedPubId);
+      if (existing) {
+        const isSameEndpoint = existing.endpointId === endpoint.id || existing.endpointIds?.includes(endpoint.id) || existing.sources?.some(s => s.endpointId === endpoint.id);
+        if (isSameEndpoint) {
+          const existingUpstream = existing.sources?.find(s => s.endpointId === endpoint.id)?.upstreamId || (existing.endpointId === endpoint.id ? existing.upstreamId : null);
+          if (existingUpstream && existingUpstream !== trimmedUpId) {
+            return res.status(409).json({ error: { message: 'Public model ID already exists. Choose another name.' } });
+          }
+          existing.enabled = true;
+          if (contextWindow !== undefined) existing.contextWindow = contextWindow;
+          if (maxTokens !== undefined) existing.maxTokens = maxTokens;
+          return res.json(store.upsert('models', existing));
+        }
+        if (!existing.sources) {
+          existing.sources = [];
+          if (existing.provider) {
+            existing.sources.push({ type: 'account', provider: existing.provider, accountIds: existing.accountIds || [], upstreamId: existing.upstreamId });
+          }
+          if (existing.endpointId) {
+            existing.sources.push({ type: 'endpoint', endpointId: existing.endpointId, upstreamId: existing.upstreamId });
+          }
+        }
+        existing.sources.push({ type: 'endpoint', endpointId: endpoint.id, upstreamId: trimmedUpId });
+        existing.endpointIds = Array.from(new Set([...(existing.endpointIds || (existing.endpointId ? [existing.endpointId] : [])), endpoint.id]));
+        if (!existing.endpointId) existing.endpointId = endpoint.id;
+        existing.enabled = true;
+        if (contextWindow !== undefined) existing.contextWindow = contextWindow;
+        if (maxTokens !== undefined) existing.maxTokens = maxTokens;
+        return res.status(201).json(store.upsert('models', existing));
+      }
+      res.status(201).json(store.upsert('models', {
+        id: trimmedPubId,
+        name: trimmedPubId,
+        endpointId: endpoint.id,
+        endpointIds: [endpoint.id],
+        upstreamId: trimmedUpId,
+        sources: [{ type: 'endpoint', endpointId: endpoint.id, upstreamId: trimmedUpId }],
+        enabled: true,
+        strategy: 'round-robin',
+        effort: { mode: 'forward', supported: [] },
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {})
+      }));
+    } catch (e) { next(e); }
+  });
+  r.post('/endpoints/:id/discover', async (req,res,next) => { try { const ep = store.list('endpoints').find(x => x.id === req.params.id); if (!ep) return res.sendStatus(404); const models = await discoverEndpoint(ep); const cached = putCachedEndpointModels(store, ep.id, models); res.json({ models, fetchedAt: cached.fetchedAt }); } catch(e) { next(e); } });
+  // Read back last successful discovery without network access (dashboard reopen).
+  r.get('/endpoints/:id/discover/cache', (req,res) => { if (!store.list('endpoints').some(x => x.id === req.params.id)) return res.sendStatus(404); res.json(getCachedEndpointModels(store, req.params.id) || { models: [], fetchedAt: null }); });
  r.get('/analytics', (req,res) => res.json(analytics(store.list('requests'), req.query.range)));
  return r;
 }

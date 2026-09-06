@@ -362,17 +362,20 @@ async function integration(root, status) {
   openBtn.title = `Open ${status.displayPath} with the system default editor`;
 
   if (status.diagnostic) el('p', status.diagnostic, detail, 'error-message');
-  const preview = el('div', undefined, detail);
+  const preview = el('div', undefined, detail, 'integration-preview');
+  const confirmBar = el('div', undefined, detail, 'integration-confirm-bar');
+
+  function clearPlan() { preview.replaceChildren(); confirmBar.replaceChildren(); }
 
   async function runPlanFlow(endpoint) {
-    preview.replaceChildren();
+    clearPlan();
     try {
       const plan = await api(`integrations/dsh/${endpoint === 'update' ? 'update-plan' : 'plan'}`, { method: 'POST' });
       if (!root.isConnected) return;
       if (endpoint === 'install' && plan.state === 'installed') return page('install');
       el('h3', endpoint === 'update' ? 'Update preview' : 'Installation preview', preview);
       el('pre', JSON.stringify(plan.changes, null, 2), preview);
-      const confirmBtn = el('button', endpoint === 'update' ? 'Confirm update' : 'Confirm installation', preview, 'primary');
+      const confirmBtn = el('button', endpoint === 'update' ? 'Confirm update' : 'Confirm installation', confirmBar, 'primary');
       confirmBtn.onclick = async () => {
         confirmBtn.disabled = true;
         try {
@@ -384,12 +387,12 @@ async function integration(root, status) {
   }
 
   button.onclick = async () => {
-    button.disabled = true; preview.replaceChildren();
+    button.disabled = true; clearPlan();
     await runPlanFlow('install');
   };
 
   updateBtn.onclick = async () => {
-    updateBtn.disabled = true; preview.replaceChildren();
+    updateBtn.disabled = true; clearPlan();
     await runPlanFlow('update');
   };
 

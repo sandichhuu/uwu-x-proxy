@@ -1,6 +1,6 @@
 import { toggleSwitch, renderModelDictionary } from './model-dict.js';
 
-export function openImportModelsModal({ endpoint, discoveredModels, onImport, el }) {
+export function openImportModelsModal({ endpoint, discoveredModels, onImport, el, note }) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.setAttribute('role', 'dialog');
@@ -36,6 +36,7 @@ export function openImportModelsModal({ endpoint, discoveredModels, onImport, el
 
   // Modal Description
   el('p', `Select which models from "${endpoint.name}" you want to import into x-proxy. Selected models will be mapped and active.`, box, 'modal-desc');
+  if (note) el('p', note, box, 'modal-desc muted');
 
   // Toolbar: Search + Select All / Deselect All
   const toolbar = el('div', undefined, box, 'modal-model-toolbar');
@@ -262,19 +263,14 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
         fetchBtn.textContent = 'Fetching...';
         setFeedback('');
 
-        try {
-          const data = await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/discover`, { method: 'POST' });
-          const discovered = data.models || [];
-
-          if (discovered.length === 0) {
-            setFeedback('No models discovered on this endpoint.');
-            return;
-          }
-
-          // Open popup modal to let user choose which models to import
+        // Shared import flow: limits detected at fetch time travel with each
+        // entry into the KV mapping; the backend also fills them from its
+        // JSON cache when the client omits them.
+        const openForModels = (list, note) => {
           openImportModelsModal({
             endpoint: selectedEndpoint,
-            discoveredModels: discovered,
+            discoveredModels: list,
+            note,
             el,
             onImport: async (selectedModels) => {
               // 1. Clear old records
@@ -300,7 +296,11 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
 
                 await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/models`, {
                   method: 'POST',
-                  body: JSON.stringify({ publicId: pubId, upstreamId: upId })
+                  body: JSON.stringify({
+                    publicId: pubId, upstreamId: upId,
+                    ...(Number(m.contextWindow ?? m.windowContext ?? m.context_length) > 0 ? { contextWindow: Math.floor(Number(m.contextWindow ?? m.windowContext ?? m.context_length)) } : {}),
+                    ...(Number(m.maxTokens ?? m.maxOutputTokens ?? m.max_completion_tokens) > 0 ? { maxTokens: Math.floor(Number(m.maxTokens ?? m.maxOutputTokens ?? m.max_completion_tokens)) } : {})
+                  })
                 });
 
                 newItems.push({
@@ -317,7 +317,28 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
               setFeedback(`Successfully imported and mapped ${newItems.length} models.`);
             }
           });
+        };
+
+        try {
+          const data = await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/discover`, { method: 'POST' });
+          const discovered = data.models || [];
+
+          if (discovered.length === 0) {
+            setFeedback('No models discovered on this endpoint.');
+            return;
+          }
+
+          openForModels(discovered, data.fetchedAt ? `Fetched just now (${data.fetchedAt}). Limits are cached for reopen.` : undefined);
         } catch (err) {
+          // Offline / reopen without network: fall back to the JSON cache.
+          try {
+            const cached = await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/discover/cache`);
+            if (cached && Array.isArray(cached.models) && cached.models.length > 0) {
+              openForModels(cached.models, `Live fetch failed; using cached discovery${cached.fetchedAt ? ` from ${cached.fetchedAt}` : ''}.`);
+              setFeedback(`Live fetch failed, showing ${cached.models.length} cached models.`);
+              return;
+            }
+          } catch { /* ignore, report the original error below */ }
           setFeedback(err, true);
         } finally {
           fetchBtn.disabled = false;

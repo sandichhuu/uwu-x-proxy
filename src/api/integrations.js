@@ -31,15 +31,37 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
     const state = inspect(value);
     return { text, doc, value, ...state };
   }
+  function positiveInt(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return undefined;
+    return Math.floor(n);
+  }
+  function detectedContextWindow(m) {
+    return positiveInt(m.contextWindow)
+      ?? positiveInt(m.windowContext)
+      ?? positiveInt(m.context_length)
+      ?? positiveInt(m.contextLength)
+      ?? undefined;
+  }
+  function detectedMaxTokens(m) {
+    return positiveInt(m.maxTokens)
+      ?? positiveInt(m.maxOutputTokens)
+      ?? positiveInt(m.max_completion_tokens)
+      ?? positiveInt(m.maxCompletionTokens)
+      ?? undefined;
+  }
   function modelEntry(m) {
-    const isEndpoint = !!(m.endpointId || m.endpointIds?.length);
+    const isEndpoint = !!(m.endpointId || m.endpointIds?.length || (m.sources || []).some(s => s.type === 'endpoint' || s.endpointId));
     const isGemini = !isEndpoint && (m.provider?.startsWith('google') || /gemini/i.test(m.id));
     const isGpt = !isEndpoint && (
       m.provider === 'openai-codex' || m.provider === 'openai' ||
       m.bindings?.some(b => b.provider === 'openai-codex' || b.provider === 'openai')
     );
-    const contextWindow = isEndpoint ? 262144 : 1048576;
-    const maxTokens = isEndpoint ? 32768 : isGemini ? 65536 : 131072;
+    // Dynamic: prefer discovered limits (e.g. OpenRouter `context_length` /
+    // `top_provider.max_completion_tokens` persisted on the model/route card).
+    // Fallback for generic endpoints without metadata: 128K context / 32K output.
+    const contextWindow = detectedContextWindow(m) ?? (isEndpoint ? 131072 : 1048576);
+    const maxTokens = detectedMaxTokens(m) ?? (isEndpoint ? 32768 : isGemini ? 65536 : 131072);
     const supported = m.effort?.supported;
     // GPT models use the codex remapping (minimal→low, low→medium, …)
     // Gemini/Claude/endpoint models with effort use an identity mapping of their supported levels.
@@ -59,6 +81,9 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
     return { displayName: 'uwu-x-proxy', apiKeyEnv: 'UWU_PROXY_KEY', api: 'anthropic-messages', baseURL,
       models: (store.list('routes').length ? store.list('routes') : store.list('models')).filter(m => m.enabled !== false).map(modelEntry) };
   }
+  // DSH reads limits stored on model/route cards (persisted at import time
+  // from fetch discovery, see endpoint-cache) and falls back to 128K / 32K.
+  // No network calls here: detection runs only when fetching models.
   function planFrom(current) {
     if (current.state === 'invalid') throw conflict(current.diagnostic);
     const changes = current.state === 'installed' ? [] : [{ add: 'llm-pi-ai.providers.x-proxy', ...provider() }];

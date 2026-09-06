@@ -507,7 +507,11 @@ export function renderModelDictionary(parent, {
           if (endpointId) {
             await api(`endpoints/${encodeURIComponent(endpointId)}/models`, {
               method: 'POST',
-              body: JSON.stringify({ publicId: pubId, upstreamId: upId })
+              body: JSON.stringify({
+                publicId: pubId, upstreamId: upId,
+                ...(Number(m.contextWindow ?? m.windowContext ?? m.context_length) > 0 ? { contextWindow: Math.floor(Number(m.contextWindow ?? m.windowContext ?? m.context_length)) } : {}),
+                ...(Number(m.maxTokens ?? m.maxOutputTokens ?? m.max_completion_tokens) > 0 ? { maxTokens: Math.floor(Number(m.maxTokens ?? m.maxOutputTokens ?? m.max_completion_tokens)) } : {})
+              })
             });
           } else {
             await api('models', {
