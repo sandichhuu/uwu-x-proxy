@@ -41,9 +41,9 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
     const contextWindow = isEndpoint ? 262144 : 1048576;
     const maxTokens = isEndpoint ? 32768 : isGemini ? 65536 : 131072;
     const supported = m.effort?.supported;
-    const effortDefault = m.effort?.default;
     // GPT models use the codex remapping (minimal→low, low→medium, …)
-    // Gemini/Claude/endpoint models with effort use an identity mapping of their supported levels
+    // Gemini/Claude/endpoint models with effort use an identity mapping of their supported levels.
+    // No per-model default is emitted: DSH decides its own default.
     const reasoningEfforts = isGpt
       ? mapping
       : (supported?.length ? Object.fromEntries(supported.map(l => [l, l])) : null);
@@ -52,8 +52,7 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
       name: m.name || m.id,
       contextWindow,
       maxTokens,
-      ...(reasoningEfforts ? { reasoningEfforts } : {}),
-      ...(effortDefault ? { reasoningEffort: effortDefault } : {})
+      ...(reasoningEfforts ? { reasoningEfforts } : {})
     };
   }
   function provider() {

@@ -208,10 +208,35 @@ export function adminRouter(store) {
        }
      ];
 
-     for (const route of defaultRoutes) {
-       store.upsert('routes', route);
-     }
-     res.json({ ok: true, count: defaultRoutes.length, routes: store.list('routes') });
+      for (const route of defaultRoutes) {
+        store.upsert('routes', route);
+      }
+
+      // Map endpoint-backed model cards to routes as well (forward mode:
+      // the public name maps to the endpoint upstream unchanged). Existing
+      // routes are never overwritten; account cards are skipped here.
+      let endpointCount = 0;
+      for (const m of store.list('models')) {
+        const endpointIds = Array.from(new Set([
+          ...(m.endpointIds || (m.endpointId ? [m.endpointId] : [])),
+          ...(m.sources || []).filter(s => (s.type === 'endpoint' || s.endpointId) && s.endpointId).map(s => s.endpointId)
+        ])).filter(id => store.list('endpoints').some(e => e.id === id && e.enabled !== false));
+        if (!endpointIds.length) continue;
+        if (store.list('routes').some(r => r.id === m.id)) continue;
+        store.upsert('routes', {
+          id: m.id,
+          name: m.name || m.id,
+          upstreamId: m.upstreamId,
+          endpointId: endpointIds[0],
+          endpointIds,
+          sources: endpointIds.map(endpointId => ({ type: 'endpoint', endpointId, upstreamId: m.upstreamId })),
+          effort: { mode: 'forward', supported: [] },
+          enabled: m.enabled !== false,
+          strategy: m.strategy || 'round-robin'
+        });
+        endpointCount++;
+      }
+      res.json({ ok: true, count: defaultRoutes.length + endpointCount, routes: store.list('routes') });
    } catch (e) { next(e); }
  });
  r.patch('/routes/:id', (req,res) => { const old = store.list('routes').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); res.json(store.upsert('routes', { ...old, ...req.body, id: old.id })); });

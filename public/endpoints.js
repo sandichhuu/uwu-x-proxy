@@ -327,6 +327,15 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
       if (selectedEndpoint && selectedEndpoint.id === ep.id) {
         tr.style.backgroundColor = '#fbf7ee';
       }
+      // Row click selects this endpoint and shows its models below.
+      tr.style.cursor = 'pointer';
+      tr.title = `Manage models for endpoint ${ep.name}`;
+      tr.onclick = e => {
+        if (e.target.closest('button, a, input, select, label')) return;
+        selectedEndpoint = ep;
+        renderEndpointsList();
+        renderModelPanel();
+      };
 
       // Status Toggle (Enable / Disable) - First Column
       const tdStatus = el('td', undefined, tr);
@@ -359,22 +368,12 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
       // Base URL
       el('td', ep.baseUrl, tr);
 
-      // Actions: Manage Models & Delete
+      // Actions: Delete (row click manages models)
       const tdActions = el('td', undefined, tr);
       const btnGroup = el('div', undefined, tdActions);
       btnGroup.style.display = 'flex';
       btnGroup.style.gap = '6px';
       btnGroup.style.alignItems = 'center';
-
-      const selectBtn = el('button', selectedEndpoint && selectedEndpoint.id === ep.id ? 'Selected' : 'Manage Models', btnGroup, 'sm');
-      if (selectedEndpoint && selectedEndpoint.id === ep.id) {
-        selectBtn.classList.add('primary');
-      }
-      selectBtn.onclick = () => {
-        selectedEndpoint = ep;
-        renderEndpointsList();
-        renderModelPanel();
-      };
 
       const deleteBtn = el('button', 'Delete', btnGroup, 'sm danger');
       deleteBtn.title = `Delete endpoint ${ep.name}`;

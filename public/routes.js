@@ -257,7 +257,7 @@ export function routesPanel(parent, { api, el, error }) {
         const opt = el('option', eff, defSelect);
         opt.value = eff;
       });
-      defSelect.value = selectedRoute.effort?.default || 'medium';
+      defSelect.value = selectedRoute.effort?.default || 'low';
 
       defSelect.onchange = async () => {
         defSelect.disabled = true;
@@ -471,7 +471,7 @@ export function routesPanel(parent, { api, el, error }) {
         };
         effortConfig = {
           mode: 'variant',
-          default: 'medium',
+          default: 'low',
           supported: ['low', 'medium', 'high', 'xhigh'],
           variants
         };

@@ -184,8 +184,9 @@ function accounts(root) {
           });
         } else {
           // Click a row to inspect that account's family quota below
-          // (click again to return to All accounts).
-          let selectedAccountId = 'all', accountsTable = null;
+          // (click again to return to All accounts). The first account is
+          // pre-selected on tab enter.
+          let selectedAccountId = (rows.find(a => a.enabled !== false) || rows[0])?.id || 'all', accountsTable = null;
           const paintSelection = () => {
             accountsTable?.querySelectorAll('tbody tr').forEach((tr, i) => {
               tr.style.backgroundColor = rows[i] && rows[i].id === selectedAccountId ? '#fdf4ea' : '';
@@ -254,6 +255,7 @@ function accounts(root) {
             paintSelection();
             renderFamilyCards();
           });
+          paintSelection();
 
           // Quota by family (Antigravity-style): Weekly + Five Hour remaining
           // per model family. Click a table row above to inspect one account;

@@ -144,5 +144,6 @@ test('dashboard renders family quota sections for google and openai', () => {
   assert.match(appJs, /All accounts/);
   assert.match(appJs, /selectedAccountId/);
   assert.match(appJs, /Click to show family quota for this account/);
+  assert.match(appJs, /pre-selected on tab enter/);
   assert.doesNotMatch(appJs, /quotaSelect/);
 });
