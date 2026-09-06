@@ -5,7 +5,8 @@ import {
   openAIToGemini,
   geminiToAnthropic,
   geminiToOpenAI,
-  unwrapGemini
+  unwrapGemini,
+  rememberThoughtSignature
 } from '../src/providers/google-converter.js';
 
 test('anthropicToGemini maps system, turns and tools to Gemini parts', () => {
@@ -23,7 +24,7 @@ test('anthropicToGemini maps system, turns and tools to Gemini parts', () => {
   assert.equal(request.systemInstruction.parts[0].text, 'Be helpful');
   assert.equal(request.contents[0].role, 'user');
   assert.equal(request.contents[1].role, 'model');
-  assert.deepEqual(request.contents[1].parts[1], { functionCall: { name: 'weather', args: { city: 'Hanoi' } } });
+  assert.deepEqual(request.contents[1].parts[1], { functionCall: { name: 'weather', args: { city: 'Hanoi' } }, thoughtSignature: 'skip_thought_signature_validator' });
   assert.equal(request.contents[2].parts[0].functionResponse.name, 'weather');
   assert.equal(request.tools[0].functionDeclarations[0].name, 'weather');
   assert.equal(request.generationConfig.maxOutputTokens, 50);
@@ -61,6 +62,26 @@ test('geminiToAnthropic converts text, thinking and function calls', () => {
   assert.deepEqual(message.content[2].input, { city: 'Hanoi' });
   assert.equal(message.stop_reason, 'tool_use');
   assert.deepEqual(message.usage, { input_tokens: 7, output_tokens: 4 });
+});
+
+test('functionCall parts carry a remembered thoughtSignature, else the sentinel', () => {
+  rememberThoughtSignature('toolu_known', 'real-sig-123');
+  const request = anthropicToGemini({
+    messages: [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_known', name: 'a', input: {} }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_new', name: 'b', input: {} }] }
+    ]
+  }, {});
+  assert.equal(request.contents[0].parts[0].thoughtSignature, 'real-sig-123');
+  assert.equal(request.contents[1].parts[0].thoughtSignature, 'skip_thought_signature_validator');
+
+  const reply = geminiToAnthropic({
+    candidates: [{ content: { parts: [{ functionCall: { name: 'a', args: {} }, thoughtSignature: 'sig-from-upstream' }] }, finishReason: 'STOP' }]
+  }, 'public');
+  const remembered = anthropicToGemini({
+    messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: reply.content[0].id, name: 'a', input: {} }] }]
+  }, {});
+  assert.equal(remembered.contents[0].parts[0].thoughtSignature, 'sig-from-upstream');
 });
 
 test('geminiToOpenAI maps finish reasons and usage, unwraps envelopes', () => {

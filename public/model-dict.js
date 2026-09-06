@@ -419,6 +419,7 @@ export function renderModelDictionary(parent, {
       fetchBtn,
       fetchModels,
       loadExistingModels,
+      existingMappings,
       renderRows,
       setFeedback,
       mapModel,

@@ -11,6 +11,21 @@ const SAFETY_SETTINGS = [
 
 const isThinkingModel = id => /thinking/i.test(id || '');
 
+// Upstream rejects functionCall parts without a thoughtSignature (HTTP 400).
+// Real signatures are remembered per tool id when upstream sends them; ids we
+// never issued a signature for fall back to the officially supported sentinel.
+const thoughtSignatures = new Map();
+const MAX_SIG_CACHE = 2000;
+const SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+export function rememberThoughtSignature(id, sig) {
+  if (!id || !sig) return;
+  if (!thoughtSignatures.has(id) && thoughtSignatures.size >= MAX_SIG_CACHE) {
+    thoughtSignatures.delete(thoughtSignatures.keys().next().value);
+  }
+  thoughtSignatures.set(id, sig);
+}
+const thoughtSignatureFor = id => thoughtSignatures.get(id) || SKIP_THOUGHT_SIGNATURE;
+
 function toolResultToObject(content) {
   const text = Array.isArray(content)
     ? content.filter(x => x?.type === 'text').map(x => x.text).join('\n')
@@ -70,7 +85,7 @@ export function anthropicToGemini(body, resolved) {
       for (const b of blocks) {
         if (b.type === 'text') { if (b.text) parts.push({ text: b.text }); }
         else if (b.type === 'thinking' || b.type === 'redacted_thinking') { /* Reasoning is not echoed back upstream. */ }
-        else if (b.type === 'tool_use') parts.push({ functionCall: { name: b.name, args: b.input || {} } });
+        else if (b.type === 'tool_use') parts.push({ functionCall: { name: b.name, args: b.input || {} }, thoughtSignature: thoughtSignatureFor(b.id) });
         else throw bad(`Unsupported content block: ${b.type}`);
       }
       if (parts.length) contents.push({ role: 'model', parts });
@@ -125,7 +140,7 @@ export function openAIToGemini(body, resolved) {
         if (!tc.function?.name) continue;
         let args = {};
         try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = { raw: String(tc.function.arguments || '') }; }
-        parts.push({ functionCall: { name: tc.function.name, args } });
+        parts.push({ functionCall: { name: tc.function.name, args }, thoughtSignature: thoughtSignatureFor(tc.id) });
       }
       if (parts.length) contents.push({ role: 'model', parts });
       continue;
@@ -179,7 +194,9 @@ export function geminiToAnthropic(response, publicModel) {
   const content = [];
   for (const p of parts) {
     if (p.functionCall) {
-      content.push({ type: 'tool_use', id: p.functionCall.id || toolUseId(), name: p.functionCall.name, input: p.functionCall.args || {} });
+      const id = p.functionCall.id || toolUseId();
+      rememberThoughtSignature(id, p.thoughtSignature || p.thought_signature);
+      content.push({ type: 'tool_use', id, name: p.functionCall.name, input: p.functionCall.args || {} });
     } else if (typeof p.text === 'string' && p.text) {
       content.push(p.thought ? { type: 'thinking', thinking: p.text } : { type: 'text', text: p.text });
     }
@@ -207,7 +224,9 @@ export function geminiToOpenAI(response, publicModel) {
   const toolCalls = [];
   for (const p of parts) {
     if (p.functionCall) {
-      toolCalls.push({ id: `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`, type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args ?? {}) } });
+      const id = `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+      rememberThoughtSignature(id, p.thoughtSignature || p.thought_signature);
+      toolCalls.push({ id, type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args ?? {}) } });
     } else if (typeof p.text === 'string' && !p.thought) text += p.text;
   }
   const rawReason = String(candidate?.finishReason || 'STOP').toUpperCase();
@@ -285,7 +304,9 @@ export async function streamGeminiToAnthropic(upstream, res, publicId, signal) {
         sawTool = true;
         const index = nextIndex++;
         openBlocks.add(index);
-        await write({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: part.functionCall.id || toolUseId(), name: part.functionCall.name, input: {} } });
+        const toolId = part.functionCall.id || toolUseId();
+        rememberThoughtSignature(toolId, part.thoughtSignature || part.thought_signature);
+        await write({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: toolId, name: part.functionCall.name, input: {} } });
         await write({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(part.functionCall.args ?? {}) } });
       } else if (typeof part.text === 'string' && part.text) {
         if (part.thought) {
@@ -339,7 +360,9 @@ export async function streamGeminiToOpenAI(upstream, res, publicId, signal) {
     for (const part of candidate?.content?.parts || []) {
       if (part.functionCall) {
         finishReason = 'tool_calls';
-        await delta({ tool_calls: [{ index: toolIndex++, id: `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`, type: 'function', function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}) } }] });
+        const toolId = `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+        rememberThoughtSignature(toolId, part.thoughtSignature || part.thought_signature);
+        await delta({ tool_calls: [{ index: toolIndex++, id: toolId, type: 'function', function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}) } }] });
       } else if (typeof part.text === 'string' && part.text && !part.thought) {
         await delta({ content: part.text });
       }

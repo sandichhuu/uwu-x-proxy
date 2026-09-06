@@ -255,7 +255,7 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
             onImport: async (selectedModels) => {
               // 1. Clear old records
               await loadExistingModels();
-              const oldModelIds = Array.from(new Set(Array.from(existingMappings.values()).map(m => m.id)));
+              const oldModelIds = Array.from(new Set((existingMappings ? Array.from(existingMappings.values()) : []).map(m => m.id)));
               for (const oldId of oldModelIds) {
                 try {
                   await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/models/${encodeURIComponent(oldId)}`, { method: 'DELETE' });
@@ -263,7 +263,7 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
                   console.warn('Could not remove old model:', oldId, err);
                 }
               }
-              existingMappings.clear();
+              if (existingMappings) existingMappings.clear();
 
               // 2. Map selected models
               const newItems = [];

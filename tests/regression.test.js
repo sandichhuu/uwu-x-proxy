@@ -635,6 +635,7 @@ test('fetching models clears old records and defaults to mapped, exact model nam
   assert.match(modelDictJs, /DELETE/);
   // Must NOT invent artificial prefixes like `${endpointId}/${pubId}`
   assert.doesNotMatch(modelDictJs, /\$\{endpointId\}\/\$\{pubId\}/);
+  assert.match(modelDictJs, /onFetchClick\s*\(\s*\{[^}]*existingMappings/);
 
   const endpointsJs = fs.readFileSync(path.join(process.cwd(), 'public', 'endpoints.js'), 'utf8');
   // Modal popup for model import in OpenAI-compatible tab
