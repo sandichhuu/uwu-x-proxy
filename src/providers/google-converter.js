@@ -117,6 +117,26 @@ export function anthropicToGemini(body, resolved) {
   return request;
 }
 
+// OpenAI message content can be a string or an array of parts. Text-like
+// parts are concatenated; image parts are rejected explicitly so the client
+// gets a clear 400 instead of an opaque upstream INVALID_ARGUMENT.
+function openAIContentToText(content) {
+  if (content === undefined || content === null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const chunks = [];
+    for (const block of content) {
+      if (typeof block === 'string') { chunks.push(block); continue; }
+      const type = block?.type || 'text';
+      if (type === 'text' || type === 'input_text') chunks.push(block.text || '');
+      else if (type === 'image_url' || type === 'input_image') throw bad('Image content is not supported');
+      else throw bad(`Unsupported content block: ${type}`);
+    }
+    return chunks.filter(Boolean).join('\n');
+  }
+  return String(content);
+}
+
 // OpenAI Chat Completions -> Gemini generateContent inner request.
 export function openAIToGemini(body, resolved) {
   const toolNameById = new Map();
@@ -124,18 +144,19 @@ export function openAIToGemini(body, resolved) {
   const systemTexts = [], contents = [];
   for (const m of body.messages || []) {
     if (m.role === 'system' || m.role === 'developer') {
-      const text = typeof m.content === 'string' ? m.content : '';
+      const text = openAIContentToText(m.content);
       if (text) systemTexts.push(text);
       continue;
     }
     if (m.role === 'tool') {
-      const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
+      const text = openAIContentToText(m.content);
       contents.push({ role: 'function', parts: [{ functionResponse: { name: m.name || toolNameById.get(m.tool_call_id) || 'tool_result', response: toolResultToObject(text) } }] });
       continue;
     }
     if (m.role === 'assistant') {
       const parts = [];
-      if (typeof m.content === 'string' && m.content) parts.push({ text: m.content });
+      const text = openAIContentToText(m.content);
+      if (text) parts.push({ text });
       for (const tc of m.tool_calls || []) {
         if (!tc.function?.name) continue;
         let args = {};
@@ -146,12 +167,13 @@ export function openAIToGemini(body, resolved) {
       continue;
     }
     if (m.role === 'user') {
-      const text = typeof m.content === 'string' ? m.content : '';
+      const text = openAIContentToText(m.content);
       if (text) contents.push({ role: 'user', parts: [{ text }] });
       continue;
     }
     throw bad('Invalid message role');
   }
+  if (!contents.length) throw bad('messages must contain convertible text content');
   const request = { contents, systemInstruction: { parts: [{ text: systemTexts.join('\n\n') || 'You are a helpful AI assistant.' }] }, safetySettings: SAFETY_SETTINGS };
   if (body.tools?.length) {
     const decls = [];

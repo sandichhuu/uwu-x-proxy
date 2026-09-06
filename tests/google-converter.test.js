@@ -84,6 +84,21 @@ test('functionCall parts carry a remembered thoughtSignature, else the sentinel'
   assert.equal(remembered.contents[0].parts[0].thoughtSignature, 'sig-from-upstream');
 });
 
+test('openAIToGemini parses array content parts and rejects images', () => {
+  const request = openAIToGemini({
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'sys' }] },
+      { role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'input_text', text: 'b' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }] }
+    ]
+  }, {});
+  assert.equal(request.systemInstruction.parts[0].text, 'sys');
+  assert.deepEqual(request.contents[0], { role: 'user', parts: [{ text: 'a\nb' }] });
+  assert.deepEqual(request.contents[1], { role: 'model', parts: [{ text: 'hi' }] });
+  assert.throws(() => openAIToGemini({ messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'http://x/y.png' } }] }] }, {}), { status: 400 });
+  assert.throws(() => openAIToGemini({ messages: [{ role: 'user', content: [] }] }, {}), { status: 400 });
+});
+
 test('geminiToOpenAI maps finish reasons and usage, unwraps envelopes', () => {
   const completion = geminiToOpenAI({ response: { candidates: [{ content: { parts: [{ text: 'hi' }] }, finishReason: 'MAX_TOKENS' }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 5 } } }, 'public');
   assert.equal(completion.model, 'public');
