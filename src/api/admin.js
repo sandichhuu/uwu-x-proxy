@@ -258,14 +258,26 @@ export function adminRouter(store) {
         const primaryEndpoint = store.list('endpoints').find(e => e.id === endpointIds[0]);
         const routeId = prefixedRouteId(primaryEndpoint?.name || primaryEndpoint?.id || 'endpoint', m.id);
         if (store.list('routes').some(r => r.id === routeId)) continue;
-        // Migrate legacy unprefixed endpoint route if present.
-        const legacyEndpointRoute = routeId !== m.id ? store.list('routes').find(r => r.id === m.id) : null;
+        // Migrate stale endpoint routes for the same model+endpoint: legacy
+        // unprefixed ids ("llama3.2:latest") or old prefixes left behind
+        // after the endpoint was renamed ("ollama/..." -> "ollama_edited/...").
+        const staleEndpointRoutes = store.list('routes').filter(r => {
+          if (r.id === routeId) return false;
+          if (!(r.id === m.id || r.id.endsWith('/' + m.id))) return false;
+          if (r.upstreamId !== m.upstreamId) return false;
+          const refs = new Set([
+            ...(r.endpointIds || (r.endpointId ? [r.endpointId] : [])),
+            ...((r.sources || []).filter(s => s.endpointId).map(s => s.endpointId))
+          ]);
+          return endpointIds.some(id => refs.has(id));
+        });
         let enabled = m.enabled !== false;
         let strategy = m.strategy || 'round-robin';
-        if (legacyEndpointRoute) {
-          if (typeof legacyEndpointRoute.enabled === 'boolean') enabled = legacyEndpointRoute.enabled;
-          if (legacyEndpointRoute.strategy) strategy = legacyEndpointRoute.strategy;
-          store.remove('routes', legacyEndpointRoute.id);
+        const donorRoute = staleEndpointRoutes[0];
+        if (donorRoute) {
+          if (typeof donorRoute.enabled === 'boolean') enabled = donorRoute.enabled;
+          if (donorRoute.strategy) strategy = donorRoute.strategy;
+          for (const stale of staleEndpointRoutes) store.remove('routes', stale.id);
         }
         store.upsert('routes', {
           id: routeId,

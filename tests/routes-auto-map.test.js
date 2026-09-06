@@ -73,6 +73,34 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   assert.equal(store.list('routes').find(r => r.id === 'ollama/llama3.2:latest').strategy, 'smart');
 });
 
+test('auto-map renames endpoint routes after the endpoint is renamed', async t => {
+  const store = memory();
+  store.data.endpoints.push({ id: 'ep_ollama', name: 'Ollama', protocol: 'openai', baseUrl: 'http://ollama.local/v1', enabled: true, allowPrivate: true });
+  store.data.models.push(
+    { id: 'llama3.2:latest', name: 'llama3.2:latest', endpointId: 'ep_ollama', endpointIds: ['ep_ollama'], upstreamId: 'llama3.2:latest', enabled: true, strategy: 'round-robin', effort: { mode: 'forward', supported: [] } }
+  );
+  const base = await listen(t, createApp(store));
+  const post = (route, body = {}) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const patch = (route, body = {}) => fetch(`${base}${route}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  await post('/admin/api/routes/auto-map');
+  assert.ok(store.list('routes').some(r => r.id === 'ollama/llama3.2:latest'));
+
+  // Customize then rename the endpoint (spaces become underscores).
+  store.upsert('routes', { ...store.list('routes').find(r => r.id === 'ollama/llama3.2:latest'), strategy: 'smart' });
+  const rename = await patch('/admin/api/endpoints/ep_ollama', { name: 'My Server' });
+  assert.equal(rename.status, 200);
+
+  const remap = await post('/admin/api/routes/auto-map');
+  assert.equal(remap.status, 200);
+  const renamed = store.list('routes').find(r => r.id === 'my_server/llama3.2:latest');
+  assert.ok(renamed, 'remap must create a route with the new endpoint prefix');
+  assert.ok(!store.list('routes').some(r => r.id === 'ollama/llama3.2:latest'), 'stale route with the old prefix must be removed');
+  assert.equal(renamed.strategy, 'smart', 'customizations survive the rename');
+  assert.equal(resolveModel(store, 'my_server/llama3.2:latest').endpoint.id, 'ep_ollama');
+  assert.throws(() => resolveModel(store, 'ollama/llama3.2:latest'), /Unknown model/);
+});
+
 test('dsh install omits reasoningEffort but keeps reasoningEfforts', t => {
   const file = path.join(temp(t), 'settings.yaml'), store = memory();
   store.data.models.push(
