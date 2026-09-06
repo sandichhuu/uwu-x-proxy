@@ -1,11 +1,13 @@
 import { openAddAccountModal, oauthPanel } from './oauth.js';
 import { endpointsPanel } from './endpoints.js';
 import { routesPanel } from './routes.js';
+import { inferencePanel } from './inference.js';
 import { trendChart, distributionChart, COLORS } from './charts.js';
 import { toggleSwitch, calculateQuotaPercent, quotaBreakdown, familyQuota, familyQuotaAll, familySummary, codexQuota, resetCountdown, countdownFromSec, renderQuotaBadge, renderModelDictionary, accountModelCards } from './model-dict.js';
 const content = document.querySelector('#content'), title = document.querySelector('#title');
 const descriptions = {
   analytics: 'A little clarity on everything flowing through your proxy.',
+  inference: 'Direct chat and reasoning interface with your mapped models.',
   models: 'Your public models, connected through one endpoint.',
   routes: 'Configure routing rules, effort mappings, and model aliases.',
   accounts: 'Bring your providers together in one place.',
@@ -470,6 +472,7 @@ async function page(name) {
   const root = el('div'); content.replaceChildren(root); content.setAttribute('aria-busy', 'true');
   el('div', 'Loading your workspace...', root, 'loading');
   try {
+    if (name === 'inference') { root.replaceChildren(); inferencePanel(root, { api, el, error }); return; }
     if (name === 'accounts') { root.replaceChildren(); accounts(root); return; }
     if (name === 'routes') { root.replaceChildren(); routesPanel(root, { api, el, error }); return; }
     const data = await api(name === 'analytics' ? `analytics?range=${range}` : name === 'logs' ? 'analytics' : name === 'install' ? 'integrations' : name);

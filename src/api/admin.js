@@ -11,6 +11,7 @@ import { discoverGoogle } from '../providers/google-antigravity.js';
 import { buildAccountExport, normalizeAccountImport, findImportTarget, TRANSFERABLE_PROVIDERS } from '../auth/account-transfer.js';
 import { discoverOpenAI, quotaOpenAI } from '../providers/openai-codex.js';
 import { putCachedEndpointModels, getCachedEndpointModels, lookupCachedLimits, dropCachedEndpoint } from '../storage/endpoint-cache.js';
+import { run } from './inference.js';
 
 const safeAccount = ({ accessToken, refreshToken, idToken, ...account }) => account;
 const normalizeRoutePrefix = (raw) => {
@@ -34,6 +35,7 @@ export function adminRouter(store) {
  const r = express.Router(); r.use(auth(store, true));
  r.post('/accounts/openai/import-codex', (req,res,next) => { try { res.set('Cache-Control', 'no-store').json(importFromCodex(store)); } catch(e) { next(e); } });
  r.get('/health', (_, res) => res.json({ ok: true }));
+ r.post('/chat', (req, res) => run(store, req, res, 'anthropic'));
  r.get('/models', (_, res) => res.json(store.list('models')));
  r.post('/models', (req,res) => {
    const { id: modelId, endpointId, upstreamId, name, effort, provider, accountIds, enabled = true, strategy = 'round-robin', variants, sources } = req.body;

@@ -124,7 +124,7 @@ function createAnthropicStream(publicId) {
     }
   };
 }
-async function run(store, req, res, kind) {
+export async function run(store, req, res, kind) {
   const started = Date.now(), controller = new AbortController();
   let timer, status = 502, tokens, resolved;
   const onClose = () => { if (!res.writableEnded) controller.abort(); };
