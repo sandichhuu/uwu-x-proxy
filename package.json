@@ -1,0 +1,31 @@
+{
+  "name": "uwu-x-proxy",
+  "version": "0.1.0",
+  "description": "Unified OpenAI and Anthropic compatible proxy.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "uwu-x-proxy": "bin/cli.js"
+  },
+  "files": [
+    "src",
+    "public",
+    "bin",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs"
+  ],
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "express": "^4.21.2",
+    "yaml": "^2.6.1"
+  }
+}

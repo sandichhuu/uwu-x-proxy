@@ -1,0 +1,433 @@
+import { toggleSwitch, renderModelDictionary } from './model-dict.js';
+
+export function openImportModelsModal({ endpoint, discoveredModels, onImport, el }) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+
+  const box = document.createElement('div');
+  box.className = 'modal-box';
+  box.style.maxWidth = '560px';
+  backdrop.appendChild(box);
+
+  function closeModal() {
+    document.removeEventListener('keydown', onKeyDown);
+    if (backdrop.parentNode) {
+      backdrop.parentNode.removeChild(backdrop);
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Escape') closeModal();
+  }
+  document.addEventListener('keydown', onKeyDown);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  // Modal Header
+  const header = el('div', undefined, box, 'modal-header');
+  el('h3', `Import Models - ${endpoint.name}`, header);
+  const closeBtn = el('button', 'x', header, 'modal-close');
+  closeBtn.title = 'Close';
+  closeBtn.onclick = closeModal;
+
+  // Modal Description
+  el('p', `Select which models from "${endpoint.name}" you want to import into x-proxy. Selected models will be mapped and active.`, box, 'modal-desc');
+
+  // Toolbar: Search + Select All / Deselect All
+  const toolbar = el('div', undefined, box, 'modal-model-toolbar');
+  const searchInput = el('input', undefined, toolbar, 'modal-model-search');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Filter models...';
+
+  const linksBox = el('div', undefined, toolbar, 'modal-model-links');
+  const selectAllBtn = el('button', 'Select All', linksBox, 'modal-model-link');
+  selectAllBtn.type = 'button';
+  const deselectAllBtn = el('button', 'Deselect All', linksBox, 'modal-model-link');
+  deselectAllBtn.type = 'button';
+
+  // Selected state: map modelId -> boolean (default all true)
+  const selectedState = new Map();
+  for (const m of discoveredModels) {
+    const id = m.id || m.slug || m.name;
+    if (id) selectedState.set(id, true);
+  }
+
+  // Count badge
+  const countBadge = el('div', undefined, box, 'modal-model-counts');
+
+  // Scrollable model list container
+  const listContainer = el('div', undefined, box, 'modal-model-list');
+
+  // Modal Footer
+  const footer = el('div', undefined, box, 'modal-footer');
+  const cancelBtn = el('button', 'Cancel', footer);
+  cancelBtn.type = 'button';
+  cancelBtn.onclick = closeModal;
+
+  const importBtn = el('button', 'Import', footer, 'primary');
+  importBtn.type = 'button';
+
+  function updateCountBadge() {
+    let count = 0;
+    for (const val of selectedState.values()) if (val) count++;
+    countBadge.textContent = `${count} of ${discoveredModels.length} models selected`;
+    importBtn.disabled = count === 0;
+    importBtn.textContent = `Import (${count} selected)`;
+  }
+
+  function renderList(filter = '') {
+    listContainer.replaceChildren();
+    const query = filter.toLowerCase().trim();
+    const filtered = discoveredModels.filter(m => {
+      const id = (m.id || m.slug || m.name || '').toLowerCase();
+      return !query || id.includes(query);
+    });
+
+    if (filtered.length === 0) {
+      const emptyP = el('p', 'No matching models found.', listContainer, 'muted');
+      emptyP.style.padding = '16px';
+      emptyP.style.textAlign = 'center';
+      return;
+    }
+
+    filtered.forEach(m => {
+      const id = m.id || m.slug || m.name;
+      const row = el('label', undefined, listContainer, 'modal-model-item');
+
+      const checkbox = el('input', undefined, row);
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!selectedState.get(id);
+
+      checkbox.onchange = (e) => {
+        e.stopPropagation();
+        selectedState.set(id, checkbox.checked);
+        updateCountBadge();
+      };
+
+      const nameCode = el('code', id, row, 'modal-model-label');
+      nameCode.title = id;
+    });
+  }
+
+  searchInput.oninput = () => {
+    renderList(searchInput.value);
+  };
+
+  selectAllBtn.onclick = () => {
+    for (const m of discoveredModels) {
+      const id = m.id || m.slug || m.name;
+      if (id) selectedState.set(id, true);
+    }
+    renderList(searchInput.value);
+    updateCountBadge();
+  };
+
+  deselectAllBtn.onclick = () => {
+    for (const m of discoveredModels) {
+      const id = m.id || m.slug || m.name;
+      if (id) selectedState.set(id, false);
+    }
+    renderList(searchInput.value);
+    updateCountBadge();
+  };
+
+  renderList();
+  updateCountBadge();
+
+  importBtn.onclick = async () => {
+    const selectedModels = discoveredModels.filter(m => {
+      const id = m.id || m.slug || m.name;
+      return selectedState.get(id);
+    });
+    if (selectedModels.length === 0) return;
+
+    importBtn.disabled = true;
+    cancelBtn.disabled = true;
+    importBtn.textContent = 'Importing...';
+    try {
+      await onImport(selectedModels);
+      closeModal();
+    } catch (err) {
+      console.error('Import failed:', err);
+      importBtn.disabled = false;
+      cancelBtn.disabled = false;
+      updateCountBadge();
+    }
+  };
+
+  document.body.appendChild(backdrop);
+}
+
+export function endpointsPanel(parent, rows, { api, el, error, table, enabled }) {
+  let selectedEndpoint = rows.find(r => r.protocol === 'openai') || rows[0];
+
+  const header = el('div', undefined, parent, 'card-header');
+  el('h2', 'OpenAI-compatible endpoints', header);
+
+  const headerActions = el('div', undefined, header, 'tabs');
+  headerActions.style.marginBottom = '0';
+  const addRecordBtn = el('button', '+ Add Endpoint Record', headerActions, 'primary');
+  const ollamaBtn = el('button', 'Use Ollama preset', headerActions);
+
+  // Add Endpoint Form Container (toggleable)
+  const formWrap = el('div', undefined, parent);
+  formWrap.style.display = rows.length === 0 ? 'block' : 'none';
+
+  const form = el('form', undefined, formWrap, 'connection-form');
+  el('h3', 'Add New Endpoint Record', form);
+
+  function field(label, type, placeholder, required = false) {
+    const wrap = el('label', label, form), input = el('input', undefined, wrap);
+    input.type = type; input.placeholder = placeholder; input.required = required; return input;
+  }
+
+  const nameInput = field('Endpoint name', 'text', 'My Ollama', true);
+  const baseUrlInput = field('Base URL (including /v1)', 'url', 'http://localhost:11434/v1', true);
+  const apiKeyInput = field('API key (optional)', 'password', 'Not required for local Ollama');
+  apiKeyInput.autocomplete = 'new-password';
+
+  const formActions = el('div', undefined, form, 'tabs');
+  formActions.style.marginBottom = '0';
+  const saveBtn = el('button', 'Save endpoint', formActions, 'primary');
+  saveBtn.type = 'submit';
+  const cancelBtn = el('button', 'Cancel', formActions);
+  cancelBtn.type = 'button';
+
+  cancelBtn.onclick = () => {
+    formWrap.style.display = 'none';
+  };
+
+  addRecordBtn.onclick = () => {
+    formWrap.style.display = formWrap.style.display === 'none' ? 'block' : 'none';
+    if (formWrap.style.display === 'block') nameInput.focus();
+  };
+
+  ollamaBtn.onclick = () => {
+    formWrap.style.display = 'block';
+    nameInput.value = 'Ollama';
+    baseUrlInput.value = 'http://localhost:11434/v1';
+    apiKeyInput.value = '';
+    nameInput.focus();
+  };
+
+  const listContainer = el('div', undefined, parent);
+  const modelPanel = el('div', undefined, parent);
+
+  function renderModelPanel() {
+    modelPanel.replaceChildren();
+    if (!selectedEndpoint) {
+      el('p', 'Select an endpoint above or add one to manage its models.', modelPanel, 'muted');
+      return;
+    }
+
+    renderModelDictionary(modelPanel, {
+      title: `Models - ${selectedEndpoint.name}`,
+      subtitle: '',
+      endpointId: selectedEndpoint.id,
+      api,
+      el,
+      error,
+      autoFetch: false,
+      onFetchClick: async ({ fetchBtn, setFeedback, loadExistingModels, existingMappings, setItems }) => {
+        fetchBtn.disabled = true;
+        const origText = fetchBtn.textContent;
+        fetchBtn.textContent = 'Fetching...';
+        setFeedback('');
+
+        try {
+          const data = await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/discover`, { method: 'POST' });
+          const discovered = data.models || [];
+
+          if (discovered.length === 0) {
+            setFeedback('No models discovered on this endpoint.');
+            return;
+          }
+
+          // Open popup modal to let user choose which models to import
+          openImportModelsModal({
+            endpoint: selectedEndpoint,
+            discoveredModels: discovered,
+            el,
+            onImport: async (selectedModels) => {
+              // 1. Clear old records
+              await loadExistingModels();
+              const oldModelIds = Array.from(new Set(Array.from(existingMappings.values()).map(m => m.id)));
+              for (const oldId of oldModelIds) {
+                try {
+                  await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/models/${encodeURIComponent(oldId)}`, { method: 'DELETE' });
+                } catch (err) {
+                  console.warn('Could not remove old model:', oldId, err);
+                }
+              }
+              existingMappings.clear();
+
+              // 2. Map selected models
+              const newItems = [];
+              const seenIds = new Set();
+              for (const m of selectedModels) {
+                const pubId = m.id || m.slug || m.name;
+                const upId = m.upstreamId || m.id || m.slug || m.name;
+                if (!pubId || !upId || seenIds.has(pubId)) continue;
+                seenIds.add(pubId);
+
+                await api(`endpoints/${encodeURIComponent(selectedEndpoint.id)}/models`, {
+                  method: 'POST',
+                  body: JSON.stringify({ publicId: pubId, upstreamId: upId })
+                });
+
+                newItems.push({
+                  key: pubId,
+                  value: upId,
+                  effort: m.effort || { mode: 'passthrough', supported: [] },
+                  mapped: true,
+                  originalKey: pubId
+                });
+              }
+
+              setItems(newItems);
+              await loadExistingModels();
+              setFeedback(`Successfully imported and mapped ${newItems.length} models.`);
+            }
+          });
+        } catch (err) {
+          setFeedback(err, true);
+        } finally {
+          fetchBtn.disabled = false;
+          fetchBtn.textContent = origText;
+        }
+      }
+    });
+  }
+
+  function renderEndpointsList() {
+    listContainer.replaceChildren();
+    const currentRows = rows.filter(r => r.protocol === 'openai');
+
+    if (currentRows.length === 0) {
+      el('p', 'No endpoints configured yet. Click "+ Add Endpoint Record" to add your first endpoint.', listContainer, 'muted');
+      return;
+    }
+
+    const wrap = el('div', undefined, listContainer, 'table-wrap');
+    const tbl = el('table', undefined, wrap);
+    const thead = el('thead', undefined, tbl);
+    const trHead = el('tr', undefined, thead);
+    el('th', 'Status', trHead);
+    el('th', 'Name', trHead);
+    el('th', 'Base URL', trHead);
+    el('th', 'Actions', trHead);
+
+    const tbody = el('tbody', undefined, tbl);
+    for (const ep of currentRows) {
+      const tr = el('tr', undefined, tbody);
+      if (selectedEndpoint && selectedEndpoint.id === ep.id) {
+        tr.style.backgroundColor = '#fbf7ee';
+      }
+
+      // Status Toggle (Enable / Disable) - First Column
+      const tdStatus = el('td', undefined, tr);
+      const isEnabled = ep.enabled !== false;
+      const toggle = toggleSwitch({
+        checked: isEnabled,
+        ariaLabel: `Enable or disable endpoint ${ep.name}`,
+        label: isEnabled ? 'Enabled' : 'Disabled',
+        onChange: async (newChecked) => {
+          try {
+            await api(`endpoints/${encodeURIComponent(ep.id)}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ enabled: newChecked })
+            });
+            ep.enabled = newChecked;
+            const labelEl = toggle.querySelector('.toggle-label');
+            if (labelEl) labelEl.textContent = newChecked ? 'Enabled' : 'Disabled';
+          } catch (e) {
+            error(parent, e);
+            throw e;
+          }
+        }
+      });
+      tdStatus.appendChild(toggle);
+
+      // Name
+      const tdName = el('td', ep.name, tr);
+      tdName.style.fontWeight = '500';
+
+      // Base URL
+      el('td', ep.baseUrl, tr);
+
+      // Actions: Manage Models & Delete
+      const tdActions = el('td', undefined, tr);
+      const btnGroup = el('div', undefined, tdActions);
+      btnGroup.style.display = 'flex';
+      btnGroup.style.gap = '6px';
+      btnGroup.style.alignItems = 'center';
+
+      const selectBtn = el('button', selectedEndpoint && selectedEndpoint.id === ep.id ? 'Selected' : 'Manage Models', btnGroup, 'sm');
+      if (selectedEndpoint && selectedEndpoint.id === ep.id) {
+        selectBtn.classList.add('primary');
+      }
+      selectBtn.onclick = () => {
+        selectedEndpoint = ep;
+        renderEndpointsList();
+        renderModelPanel();
+      };
+
+      const deleteBtn = el('button', 'Delete', btnGroup, 'sm danger');
+      deleteBtn.title = `Delete endpoint ${ep.name}`;
+      deleteBtn.onclick = async () => {
+        if (!confirm(`Are you sure you want to delete endpoint "${ep.name}"?`)) return;
+        deleteBtn.disabled = true;
+        try {
+          await api(`endpoints/${encodeURIComponent(ep.id)}`, { method: 'DELETE' });
+          const idx = rows.indexOf(ep);
+          if (idx >= 0) rows.splice(idx, 1);
+          if (selectedEndpoint && selectedEndpoint.id === ep.id) {
+            selectedEndpoint = rows.find(r => r.protocol === 'openai') || null;
+          }
+          renderEndpointsList();
+          renderModelPanel();
+        } catch (e) {
+          error(parent, e);
+          deleteBtn.disabled = false;
+        }
+      };
+    }
+  }
+
+  form.onsubmit = async event => {
+    event.preventDefault();
+    saveBtn.disabled = true;
+    try {
+      const endpoint = await api('endpoints', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: nameInput.value.trim(),
+          baseUrl: baseUrlInput.value.trim(),
+          protocol: 'openai',
+          apiKey: apiKeyInput.value || undefined,
+          allowPrivate: true
+        })
+      });
+
+      apiKeyInput.value = '';
+      nameInput.value = '';
+      rows.push(endpoint);
+      selectedEndpoint = endpoint;
+      formWrap.style.display = 'none';
+
+      renderEndpointsList();
+      renderModelPanel();
+    } catch (e) {
+      error(parent, e);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
+  renderEndpointsList();
+  renderModelPanel();
+}
