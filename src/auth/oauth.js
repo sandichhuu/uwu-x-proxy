@@ -3,7 +3,7 @@ import { discoverProjectId } from './google/project.js';
 import { createHash, randomBytes } from 'node:crypto';
 
 const GOOGLE = {
-  clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+  clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com',
   clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
   authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token',
   userInfoUrl: 'https://www.googleapis.com/oauth2/v1/userinfo', redirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI || 'http://localhost:51121/oauth-callback',
