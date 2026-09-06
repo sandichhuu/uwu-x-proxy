@@ -12,6 +12,18 @@ import { buildAccountExport, normalizeAccountImport, findImportTarget, TRANSFERA
 import { discoverOpenAI, quotaOpenAI } from '../providers/openai-codex.js';
 
 const safeAccount = ({ accessToken, refreshToken, idToken, ...account }) => account;
+const normalizeRoutePrefix = (raw) => {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return '';
+  return s.replace(/[\s/]+/g, '_');
+};
+const prefixedRouteId = (prefixRaw, baseId) => {
+  const prefix = normalizeRoutePrefix(prefixRaw);
+  const base = String(baseId ?? '').trim();
+  if (!prefix) return base;
+  if (base.toLowerCase().startsWith(`${prefix}/`)) return base;
+  return `${prefix}/${base}`;
+};
 const account = (store, provider, accountId) => {
   const value = store.list('accounts').find(x => x.id === accountId && x.provider === provider);
   if (!value) throw Object.assign(new Error('Account not found'), { status: 404 }); return value;
@@ -59,12 +71,12 @@ export function adminRouter(store) {
      // Routes are a separate registry. Auto Map must never mutate account/endpoint model cards.
 
 
-     const defaultRoutes = [
-       {
-         id: 'gemini-3.8-flash',
-         name: 'Gemini 3.8 Flash',
-         provider: 'google',
-         upstreamId: 'gemini-3.8-flash-medium',
+      const defaultRoutes = [
+        {
+          id: 'google/gemini-3.8-flash',
+          name: 'Gemini 3.8 Flash',
+          provider: 'google',
+          upstreamId: 'gemini-3.8-flash-medium',
          effort: {
            mode: 'variant',
            default: 'medium',
@@ -85,11 +97,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gemini-3.7-flash',
-         name: 'Gemini 3.7 Flash',
-         provider: 'google',
-         upstreamId: 'gemini-3.7-flash-medium',
+        {
+          id: 'google/gemini-3.7-flash',
+          name: 'Gemini 3.7 Flash',
+          provider: 'google',
+          upstreamId: 'gemini-3.7-flash-medium',
          effort: {
            mode: 'variant',
            default: 'medium',
@@ -110,11 +122,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gemini-3.6-flash',
-         name: 'Gemini 3.6 Flash',
-         provider: 'google',
-         upstreamId: 'gemini-3.6-flash-medium',
+        {
+          id: 'google/gemini-3.6-flash',
+          name: 'Gemini 3.6 Flash',
+          provider: 'google',
+          upstreamId: 'gemini-3.6-flash-medium',
          effort: {
            mode: 'variant',
            default: 'medium',
@@ -135,11 +147,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'claude-sonnet-4-6',
-         name: 'Claude Sonnet 4.6',
-         provider: 'google',
-         upstreamId: 'claude-sonnet-4-6',
+        {
+          id: 'google/claude-sonnet-4-6',
+          name: 'Claude Sonnet 4.6',
+          provider: 'google',
+          upstreamId: 'claude-sonnet-4-6',
          effort: {
            mode: 'variant',
            default: 'medium',
@@ -158,11 +170,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gpt-5.6-sol',
-         name: 'GPT-5.6 Sol',
-         provider: 'openai',
-         upstreamId: 'gpt-5.6-sol',
+        {
+          id: 'openai/gpt-5.6-sol',
+          name: 'GPT-5.6 Sol',
+          provider: 'openai',
+          upstreamId: 'gpt-5.6-sol',
          effort: {
            mode: 'forward',
            supported: []
@@ -170,11 +182,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gpt-5.6-terra',
-         name: 'GPT-5.6 Terra',
-         provider: 'openai',
-         upstreamId: 'gpt-5.6-terra',
+        {
+          id: 'openai/gpt-5.6-terra',
+          name: 'GPT-5.6 Terra',
+          provider: 'openai',
+          upstreamId: 'gpt-5.6-terra',
          effort: {
            mode: 'forward',
            supported: []
@@ -182,11 +194,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gpt-5.6-luna',
-         name: 'GPT-5.6 Luna',
-         provider: 'openai',
-         upstreamId: 'gpt-5.6-luna',
+        {
+          id: 'openai/gpt-5.6-luna',
+          name: 'GPT-5.6 Luna',
+          provider: 'openai',
+          upstreamId: 'gpt-5.6-luna',
          effort: {
            mode: 'forward',
            supported: []
@@ -194,11 +206,11 @@ export function adminRouter(store) {
          enabled: true,
          strategy: 'round-robin'
        },
-       {
-         id: 'gpt-6-astra',
-         name: 'GPT-6 Astra',
-         provider: 'openai',
-         upstreamId: 'gpt-6-astra',
+        {
+          id: 'openai/gpt-6-astra',
+          name: 'GPT-6 Astra',
+          provider: 'openai',
+          upstreamId: 'gpt-6-astra',
          effort: {
            mode: 'forward',
            supported: []
@@ -208,13 +220,34 @@ export function adminRouter(store) {
        }
      ];
 
+      const legacyDefaultIds = {
+        'gemini-3.8-flash': 'google/gemini-3.8-flash',
+        'gemini-3.7-flash': 'google/gemini-3.7-flash',
+        'gemini-3.6-flash': 'google/gemini-3.6-flash',
+        'claude-sonnet-4-6': 'google/claude-sonnet-4-6',
+        'gpt-5.6-sol': 'openai/gpt-5.6-sol',
+        'gpt-5.6-terra': 'openai/gpt-5.6-terra',
+        'gpt-5.6-luna': 'openai/gpt-5.6-luna',
+        'gpt-6-astra': 'openai/gpt-6-astra'
+      };
+
       for (const route of defaultRoutes) {
+        // Migrate legacy unprefixed route customizations (enabled/strategy) on upgrade.
+        const legacyId = Object.keys(legacyDefaultIds).find(k => legacyDefaultIds[k] === route.id);
+        const legacy = legacyId ? store.list('routes').find(r => r.id === legacyId) : null;
+        const existing = store.list('routes').find(r => r.id === route.id);
+        if (legacy && !existing) {
+          if (typeof legacy.enabled === 'boolean') route.enabled = legacy.enabled;
+          if (legacy.strategy) route.strategy = legacy.strategy;
+        }
         store.upsert('routes', route);
+        if (legacyId) store.remove('routes', legacyId);
       }
 
       // Map endpoint-backed model cards to routes as well (forward mode:
-      // the public name maps to the endpoint upstream unchanged). Existing
-      // routes are never overwritten; account cards are skipped here.
+      // the public name is "<endpoint>/<model>" so the origin is explicit,
+      // e.g. "ollama/llama3.2:latest". Existing routes are never
+      // overwritten; account cards are skipped here.
       let endpointCount = 0;
       for (const m of store.list('models')) {
         const endpointIds = Array.from(new Set([
@@ -222,19 +255,34 @@ export function adminRouter(store) {
           ...(m.sources || []).filter(s => (s.type === 'endpoint' || s.endpointId) && s.endpointId).map(s => s.endpointId)
         ])).filter(id => store.list('endpoints').some(e => e.id === id && e.enabled !== false));
         if (!endpointIds.length) continue;
-        if (store.list('routes').some(r => r.id === m.id)) continue;
+        const primaryEndpoint = store.list('endpoints').find(e => e.id === endpointIds[0]);
+        const routeId = prefixedRouteId(primaryEndpoint?.name || primaryEndpoint?.id || 'endpoint', m.id);
+        if (store.list('routes').some(r => r.id === routeId)) continue;
+        // Migrate legacy unprefixed endpoint route if present.
+        const legacyEndpointRoute = routeId !== m.id ? store.list('routes').find(r => r.id === m.id) : null;
+        let enabled = m.enabled !== false;
+        let strategy = m.strategy || 'round-robin';
+        if (legacyEndpointRoute) {
+          if (typeof legacyEndpointRoute.enabled === 'boolean') enabled = legacyEndpointRoute.enabled;
+          if (legacyEndpointRoute.strategy) strategy = legacyEndpointRoute.strategy;
+          store.remove('routes', legacyEndpointRoute.id);
+        }
         store.upsert('routes', {
-          id: m.id,
-          name: m.name || m.id,
+          id: routeId,
+          name: routeId,
           upstreamId: m.upstreamId,
           endpointId: endpointIds[0],
           endpointIds,
           sources: endpointIds.map(endpointId => ({ type: 'endpoint', endpointId, upstreamId: m.upstreamId })),
           effort: { mode: 'forward', supported: [] },
-          enabled: m.enabled !== false,
-          strategy: m.strategy || 'round-robin'
+          enabled,
+          strategy
         });
         endpointCount++;
+      }
+      // Final sweep: drop any leftover legacy default ids superseded by prefixed ones.
+      for (const [legacyId, newId] of Object.entries(legacyDefaultIds)) {
+        if (store.list('routes').some(r => r.id === newId)) store.remove('routes', legacyId);
       }
       res.json({ ok: true, count: defaultRoutes.length + endpointCount, routes: store.list('routes') });
    } catch (e) { next(e); }

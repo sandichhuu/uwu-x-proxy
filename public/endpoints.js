@@ -164,6 +164,7 @@ export function openImportModelsModal({ endpoint, discoveredModels, onImport, el
 
 export function endpointsPanel(parent, rows, { api, el, error, table, enabled }) {
   let selectedEndpoint = rows.find(r => r.protocol === 'openai') || rows[0];
+  let editingId = null;
 
   const header = el('div', undefined, parent, 'card-header');
   el('h2', 'OpenAI-compatible endpoints', header);
@@ -172,12 +173,12 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
   headerActions.style.marginBottom = '0';
   const addRecordBtn = el('button', '+ Add Endpoint Record', headerActions, 'primary');
 
-  // Add Endpoint Form Container (toggleable)
+  // Add/Edit Endpoint Form Container (toggleable)
   const formWrap = el('div', undefined, parent);
   formWrap.style.display = rows.length === 0 ? 'block' : 'none';
 
-  const form = el('form', undefined, formWrap, 'connection-form');
-  el('h3', 'Add New Endpoint Record', form);
+  const form = el('form', undefined, formWrap, 'connection-form compact');
+  const formTitle = el('h3', 'Add New Endpoint Record', form);
 
   function field(label, type, placeholder, required = false) {
     const wrap = el('label', label, form), input = el('input', undefined, wrap);
@@ -191,18 +192,50 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
 
   const formActions = el('div', undefined, form, 'tabs');
   formActions.style.marginBottom = '0';
-  const saveBtn = el('button', 'Save endpoint', formActions, 'primary');
+  const saveBtn = el('button', 'Save endpoint', formActions, 'primary sm');
   saveBtn.type = 'submit';
-  const cancelBtn = el('button', 'Cancel', formActions);
+  const cancelBtn = el('button', 'Cancel', formActions, 'secondary sm');
   cancelBtn.type = 'button';
 
+  function resetEndpointForm() {
+    editingId = null;
+    formTitle.textContent = 'Add New Endpoint Record';
+    saveBtn.textContent = 'Save endpoint';
+    nameInput.value = '';
+    baseUrlInput.value = '';
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = 'Not required for local Ollama';
+  }
+
+  function startAddEndpoint() {
+    resetEndpointForm();
+    formWrap.style.display = 'block';
+    nameInput.focus();
+  }
+
+  function startEditEndpoint(ep) {
+    editingId = ep.id;
+    formTitle.textContent = `Edit Endpoint Record - ${ep.name}`;
+    saveBtn.textContent = 'Save changes';
+    nameInput.value = ep.name || '';
+    baseUrlInput.value = ep.baseUrl || '';
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = 'Leave blank to keep existing key';
+    formWrap.style.display = 'block';
+    nameInput.focus();
+  }
+
   cancelBtn.onclick = () => {
+    resetEndpointForm();
     formWrap.style.display = 'none';
   };
 
   addRecordBtn.onclick = () => {
-    formWrap.style.display = formWrap.style.display === 'none' ? 'block' : 'none';
-    if (formWrap.style.display === 'block') nameInput.focus();
+    if (formWrap.style.display !== 'none' && !editingId) {
+      formWrap.style.display = 'none';
+      return;
+    }
+    startAddEndpoint();
   };
 
   const listContainer = el('div', undefined, parent);
@@ -359,12 +392,18 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
       // Base URL
       el('td', ep.baseUrl, tr);
 
-      // Actions: Delete (row click manages models)
+      // Actions: Edit + Delete (row click manages models)
       const tdActions = el('td', undefined, tr);
       const btnGroup = el('div', undefined, tdActions);
       btnGroup.style.display = 'flex';
       btnGroup.style.gap = '6px';
       btnGroup.style.alignItems = 'center';
+
+      const editBtn = el('button', 'Edit', btnGroup, 'sm');
+      editBtn.title = `Edit endpoint ${ep.name}`;
+      editBtn.onclick = () => {
+        startEditEndpoint(ep);
+      };
 
       const deleteBtn = el('button', 'Delete', btnGroup, 'sm danger');
       deleteBtn.title = `Delete endpoint ${ep.name}`;
@@ -377,6 +416,10 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
           if (idx >= 0) rows.splice(idx, 1);
           if (selectedEndpoint && selectedEndpoint.id === ep.id) {
             selectedEndpoint = rows.find(r => r.protocol === 'openai') || null;
+          }
+          if (editingId === ep.id) {
+            resetEndpointForm();
+            formWrap.style.display = 'none';
           }
           renderEndpointsList();
           renderModelPanel();
@@ -392,19 +435,39 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
     event.preventDefault();
     saveBtn.disabled = true;
     try {
+      const name = nameInput.value.trim();
+      const baseUrl = baseUrlInput.value.trim();
+      const apiKeyValue = apiKeyInput.value;
+      if (editingId) {
+        const payload = { name, baseUrl };
+        if (apiKeyValue) payload.apiKey = apiKeyValue;
+        const updated = await api(`endpoints/${encodeURIComponent(editingId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+        const idx = rows.findIndex(r => r.id === editingId);
+        if (idx >= 0) rows[idx] = { ...rows[idx], ...updated };
+        if (selectedEndpoint && selectedEndpoint.id === editingId) {
+          selectedEndpoint = rows[idx] || updated;
+        }
+        resetEndpointForm();
+        formWrap.style.display = 'none';
+        renderEndpointsList();
+        renderModelPanel();
+        return;
+      }
       const endpoint = await api('endpoints', {
         method: 'POST',
         body: JSON.stringify({
-          name: nameInput.value.trim(),
-          baseUrl: baseUrlInput.value.trim(),
+          name,
+          baseUrl,
           protocol: 'openai',
-          apiKey: apiKeyInput.value || undefined,
+          apiKey: apiKeyValue || undefined,
           allowPrivate: true
         })
       });
 
-      apiKeyInput.value = '';
-      nameInput.value = '';
+      resetEndpointForm();
       rows.push(endpoint);
       selectedEndpoint = endpoint;
       formWrap.style.display = 'none';

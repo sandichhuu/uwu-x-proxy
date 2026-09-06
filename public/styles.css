@@ -110,4 +110,10 @@ button.sm{padding:4px 9px;font-size:12px;border-radius:6px;line-height:1.3}
 .route-effort-box{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .variant-pill{font-size:11px;font-family:monospace;background:#fdf6e7;color:#85500a;border:1px solid #e8cfa1}
 .sm-select{padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)}
+/* Compact inline form (Add/Edit Endpoint Record) */
+.connection-form.compact{grid-template-columns:1fr;gap:10px;margin:12px 0 20px;padding:14px 16px;max-width:560px}
+.connection-form.compact h3{font-size:14px;font-weight:600}
+.connection-form.compact label{font-size:11px;gap:4px}
+.connection-form.compact input{padding:7px 10px;font-size:13px;border-radius:6px}
+.connection-form.compact .tabs{grid-column:1/-1;display:flex;gap:8px}
 

@@ -53,15 +53,16 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   assert.equal(first.status, 200);
   const data = await first.json();
   assert.equal(data.count, 8 + 1);
-  const epRoute = store.list('routes').find(r => r.id === 'llama3.2:latest');
+  const epRoute = store.list('routes').find(r => r.id === 'ollama/llama3.2:latest');
   assert.ok(epRoute);
   assert.deepEqual(epRoute.effort, { mode: 'forward', supported: [] });
   assert.deepEqual(epRoute.sources, [{ type: 'endpoint', endpointId: 'ep_ollama', upstreamId: 'llama3.2:latest' }]);
   assert.ok(!store.list('routes').some(r => r.id === 'my-account-model'));
+  assert.ok(!store.list('routes').some(r => r.id === 'llama3.2:latest'));
   assert.deepEqual(store.data.models, modelsBefore);
   assert.deepEqual(store.data.accounts, accountsBefore);
   assert.deepEqual(store.data.endpoints, endpointsBefore);
-  assert.equal(resolveModel(store, 'llama3.2:latest').endpoint.id, 'ep_ollama');
+  assert.equal(resolveModel(store, 'ollama/llama3.2:latest').endpoint.id, 'ep_ollama');
 
   // Customized routes survive a second run; nothing is duplicated.
   store.upsert('routes', { ...epRoute, strategy: 'smart' });
@@ -69,7 +70,7 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   const second = await post('/admin/api/routes/auto-map');
   assert.equal(second.status, 200);
   assert.deepEqual(store.list('routes'), routesBefore);
-  assert.equal(store.list('routes').find(r => r.id === 'llama3.2:latest').strategy, 'smart');
+  assert.equal(store.list('routes').find(r => r.id === 'ollama/llama3.2:latest').strategy, 'smart');
 });
 
 test('dsh install omits reasoningEffort but keeps reasoningEfforts', t => {

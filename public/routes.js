@@ -37,7 +37,7 @@ export function routesPanel(parent, { api, el, error }) {
     input.type = type; input.placeholder = placeholder; input.required = required; return input;
   }
 
-  const nameInput = field('Route / Public Model ID', 'text', 'e.g. gemini-3.8-flash', true);
+  const nameInput = field('Route / Public Model ID', 'text', 'e.g. google/gemini-3.8-flash', true);
 
   const wrapMode = el('label', 'Routing Mode', form);
   const modeSelect = el('select', undefined, wrapMode);

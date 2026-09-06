@@ -799,10 +799,10 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   assert.equal((await (await fetch(`${base}/admin/api/models`)).json()).length, modelsBeforeAutoMap.length);
   assert.equal((await (await fetch(`${base}/admin/api/routes`)).json()).length, autoMapData.count);
 
-  // 3. Verify gemini-3.8-flash default mapping:
+  // 3. Verify google/gemini-3.8-flash default mapping:
   // 4 models: gemini-3.8-flash-tiered, gemini-3.8-flash-low, gemini-3.8-flash-medium, gemini-3.8-flash-high
-  // -> maps to 1 model gemini-3.8-flash with efforts: low, medium, high, xhigh
-  const flash38 = store.data.routes.find(m => m.id === 'gemini-3.8-flash');
+  // -> maps to 1 model google/gemini-3.8-flash with efforts: low, medium, high, xhigh
+  const flash38 = store.data.routes.find(m => m.id === 'google/gemini-3.8-flash');
   assert.ok(flash38);
   assert.equal(flash38.effort.mode, 'variant');
   assert.deepEqual(flash38.effort.supported, ['low', 'medium', 'high', 'xhigh']);
@@ -814,24 +814,24 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
 
   // 4. Test resolveModel routing for variant mode:
   // Requests with different effort levels route to the specific model variant
-  assert.equal(resolveModel(store, 'gemini-3.8-flash', 'low').upstreamId, 'gemini-3.8-flash-low');
-  assert.equal(resolveModel(store, 'gemini-3.8-flash', 'medium').upstreamId, 'gemini-3.8-flash-medium');
-  assert.equal(resolveModel(store, 'gemini-3.8-flash', 'high').upstreamId, 'gemini-3.8-flash-high');
-  assert.equal(resolveModel(store, 'gemini-3.8-flash', 'xhigh').upstreamId, 'gemini-3.8-flash-tiered');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'low').upstreamId, 'gemini-3.8-flash-low');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'medium').upstreamId, 'gemini-3.8-flash-medium');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'high').upstreamId, 'gemini-3.8-flash-high');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'xhigh').upstreamId, 'gemini-3.8-flash-tiered');
   // Request without effort defaults to medium -> gemini-3.8-flash-medium
-  assert.equal(resolveModel(store, 'gemini-3.8-flash').upstreamId, 'gemini-3.8-flash-medium');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash').upstreamId, 'gemini-3.8-flash-medium');
 
   // 5. Test forward mode:
   // Forward mode forwards effort to the upstream provider unchanged
-  const gptSol = store.data.routes.find(m => m.id === 'gpt-5.6-sol');
+  const gptSol = store.data.routes.find(m => m.id === 'openai/gpt-5.6-sol');
   assert.ok(gptSol);
-  const resolvedSol = resolveModel(store, 'gpt-5.6-sol', 'high');
+  const resolvedSol = resolveModel(store, 'openai/gpt-5.6-sol', 'high');
   assert.equal(resolvedSol.upstreamId, 'gpt-5.6-sol');
   assert.equal(resolvedSol.effort, 'high');
 
   // 6. Test deleting route returns 204 and app.js handles 204 without throwing non-JSON error
   assert.match(appJs, /response\.status === 204/);
-  const deleteRes = await fetch(`${base}/admin/api/routes/gpt-6-astra`, { method: 'DELETE' });
+  const deleteRes = await fetch(`${base}/admin/api/routes/${encodeURIComponent('openai/gpt-6-astra')}`, { method: 'DELETE' });
   assert.equal(deleteRes.status, 204);
 });
 
