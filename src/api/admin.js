@@ -243,8 +243,29 @@ export function adminRouter(store) {
           if (typeof legacy.enabled === 'boolean') route.enabled = legacy.enabled;
           if (legacy.strategy) route.strategy = legacy.strategy;
         }
+        // Preserve user customizations (notably enabled=false) on re-run:
+        // Auto Map must never re-enable a route the user disabled.
+        if (existing) {
+          if (typeof existing.enabled === 'boolean') route.enabled = existing.enabled;
+          if (existing.strategy) route.strategy = existing.strategy;
+        }
         store.upsert('routes', route);
         if (legacyId) store.remove('routes', legacyId);
+      }
+
+      // Prune endpoint-backed routes whose endpoints are all disabled/missing.
+      // Models enabled nhưng endpoint (provider) đã disabled thì route cũ
+      // không được giữ lại khi Auto Map.
+      const enabledEndpointIds = new Set(store.list('endpoints').filter(e => e.enabled !== false).map(e => e.id));
+      const defaultRouteIds = new Set(defaultRoutes.map(r => r.id));
+      for (const r of [...store.list('routes')]) {
+        if (defaultRouteIds.has(r.id)) continue;
+        const refs = [
+          ...(r.endpointIds || (r.endpointId ? [r.endpointId] : [])),
+          ...((r.sources || []).filter(s => s.endpointId).map(s => s.endpointId))
+        ];
+        if (!refs.length) continue; // provider/manual route, không phải endpoint
+        if (!refs.some(id => enabledEndpointIds.has(id))) store.remove('routes', r.id);
       }
 
       // Map endpoint-backed model cards to routes as well (forward mode:
@@ -253,6 +274,8 @@ export function adminRouter(store) {
       // overwritten; account cards are skipped here.
       let endpointCount = 0;
       for (const m of store.list('models')) {
+        // Auto Map must not re-add cards the user disabled.
+        if (m.enabled === false) continue;
         const endpointIds = Array.from(new Set([
           ...(m.endpointIds || (m.endpointId ? [m.endpointId] : [])),
           ...(m.sources || []).filter(s => (s.type === 'endpoint' || s.endpointId) && s.endpointId).map(s => s.endpointId)
