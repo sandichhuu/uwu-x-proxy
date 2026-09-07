@@ -345,10 +345,10 @@ export function adminRouter(store) {
      const value = account(store, req.params.provider, req.params.id);
      if (req.params.provider === 'openai') {
        res.json(await quotaOpenAI(store, value));
-     } else if (req.params.provider === 'google') {
-       await discoverGoogle(store, value);
-       const updated = account(store, 'google', req.params.id);
-       res.json({ quota: updated.quota, lastDiscoveredAt: updated.lastDiscoveredAt });
+      } else if (req.params.provider === 'google') {
+        await discoverGoogle(store, value);
+        const updated = account(store, 'google', req.params.id);
+        res.json({ quota: updated.quota, quotaGroups: updated.quotaGroups, quotaGroupsAt: updated.quotaGroupsAt, lastDiscoveredAt: updated.lastDiscoveredAt });
      } else {
        res.status(400).json({ error: 'Provider does not support quota' });
      }
