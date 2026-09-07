@@ -1,6 +1,7 @@
 import { importFromCodex } from '../auth/codex-import.js';
 import { analytics } from './analytics.js';
 import express from 'express';
+import { createRequire } from 'node:module';
 import { auth } from '../security/auth.js';
 import { assertSafeUrl } from '../security/network.js';
 import { id } from '../storage/store.js';
@@ -14,6 +15,25 @@ import { putCachedEndpointModels, getCachedEndpointModels, lookupCachedLimits, d
 import { run } from './inference.js';
 
 const safeAccount = ({ accessToken, refreshToken, idToken, ...account }) => account;
+// Running build version, resolved once: npm sets npm_package_version when
+// started via `npm start`; otherwise read directly from package.json next to
+// this source tree (also present in the published npm tarball).
+let cachedVersion;
+export function getAppVersion() {
+  if (cachedVersion) return cachedVersion;
+  if (process.env.npm_package_version) {
+    cachedVersion = process.env.npm_package_version;
+    return cachedVersion;
+  }
+  try {
+    const { version } = createRequire(import.meta.url)('../../package.json');
+    if (version) {
+      cachedVersion = version;
+      return cachedVersion;
+    }
+  } catch { /* Fall through to the dev fallback below. */ }
+  return 'dev';
+}
 const normalizeRoutePrefix = (raw) => {
   const s = String(raw ?? '').trim().toLowerCase();
   if (!s) return '';
@@ -33,8 +53,13 @@ const account = (store, provider, accountId) => {
 export function adminRouter(store) {
  const flows = createOAuthFlows(store);
  const r = express.Router(); r.use(auth(store, true));
- r.post('/accounts/openai/import-codex', (req,res,next) => { try { res.set('Cache-Control', 'no-store').json(importFromCodex(store)); } catch(e) { next(e); } });
- r.get('/health', (_, res) => res.json({ ok: true }));
+  r.post('/accounts/openai/import-codex', (req,res,next) => { try { res.set('Cache-Control', 'no-store').json(importFromCodex(store)); } catch(e) { next(e); } });
+  r.get('/health', (_, res) => res.json({ ok: true }));
+  // Version is read directly from package.json at request time so the
+  // dashboard always shows the currently running build after a publish.
+  r.get('/version', (_, res) => {
+    res.set('Cache-Control', 'no-store').json({ version: getAppVersion() });
+  });
  r.post('/chat', (req, res) => run(store, req, res, 'anthropic'));
  r.get('/models', (_, res) => res.json(store.list('models')));
  r.post('/models', (req,res) => {

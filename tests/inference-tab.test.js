@@ -140,3 +140,23 @@ test('/admin/api/chat end-to-end chat with mock endpoint', async t => {
   assert.equal(receivedBody.messages[0].role, 'user');
   assert.equal(receivedBody.messages[0].content, 'Hello there!');
 });
+
+test('dashboard brand shows running version from package.json, injected server-side', async t => {
+  const expected = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).version;
+  assert.match(expected, /^\d+\.\d+\.\d+/, 'package.json carries a semver version');
+  const store = memory();
+  const app = createApp(store);
+  const base = await listen(t, app);
+
+  const resVersion = await fetch(base + '/admin/api/version');
+  assert.equal(resVersion.status, 200);
+  assert.equal((await resVersion.json()).version, expected);
+
+  for (const route of ['/admin/', '/admin/index.html']) {
+    const resHtml = await fetch(base + route);
+    assert.equal(resHtml.status, 200);
+    const html = await resHtml.text();
+    assert.doesNotMatch(html, /__UWU_APP_VERSION__/, `${route} has no unreplaced version token`);
+    assert.match(html, new RegExp(`<small id="app-version">v${expected}<\\/small>`), `${route} brand shows v${expected}`);
+  }
+});

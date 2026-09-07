@@ -33,7 +33,12 @@ function toolResultToObject(content) {
   if (!text) return {};
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' ? parsed : { result: parsed };
+    // Gemini `functionResponse.response` is a Struct (object). A top-level
+    // JSON array (e.g. list-files / search results) must be wrapped, otherwise
+    // upstream rejects it with:
+    // "Unknown name response ... Proto field is not repeating, cannot start list."
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    return { result: parsed };
   } catch {
     return { result: text };
   }
@@ -150,7 +155,14 @@ export function openAIToGemini(body, resolved) {
     }
     if (m.role === 'tool') {
       const text = openAIContentToText(m.content);
-      contents.push({ role: 'function', parts: [{ functionResponse: { name: m.name || toolNameById.get(m.tool_call_id) || 'tool_result', response: toolResultToObject(text) } }] });
+      // Gemini only accepts `user`/`model` roles; `function` is an OpenAI
+      // concept and is rejected upstream. Consecutive tool messages are merged
+      // into a single user turn with one part per response (the documented
+      // multi-parallel-call shape).
+      const part = { functionResponse: { name: m.name || toolNameById.get(m.tool_call_id) || 'tool_result', response: toolResultToObject(text) } };
+      const last = contents[contents.length - 1];
+      if (last && last.role === 'user' && last._toolOnly) last.parts.push(part);
+      else contents.push({ role: 'user', parts: [part], _toolOnly: true });
       continue;
     }
     if (m.role === 'assistant') {
@@ -174,6 +186,7 @@ export function openAIToGemini(body, resolved) {
     throw bad('Invalid message role');
   }
   if (!contents.length) throw bad('messages must contain convertible text content');
+  for (const c of contents) delete c._toolOnly;
   const request = { contents, systemInstruction: { parts: [{ text: systemTexts.join('\n\n') || 'You are a helpful AI assistant.' }] }, safetySettings: SAFETY_SETTINGS };
   if (body.tools?.length) {
     const decls = [];

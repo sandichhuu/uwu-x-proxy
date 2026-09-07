@@ -1,9 +1,10 @@
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './storage/store.js';
 import { inferenceRouter } from './api/inference.js';
-import { adminRouter } from './api/admin.js';
+import { adminRouter, getAppVersion } from './api/admin.js';
 import { integrationRouter } from './api/integrations.js';
 import { auth } from './security/auth.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,9 +26,24 @@ export function createApp(store, integrationOptions) {
   app.use('/admin/api/integrations', auth(store, true), integrationRouter(store, integrationOptions));
   app.use('/admin/api', adminRouter(store));
   app.use('/admin/api', (_, res) => res.status(404).json({ error: { message: 'Unknown admin API route. Restart x-proxy and reload the dashboard if you recently updated.' } }));
-  app.use('/admin', express.static(path.join(here, '../public')));
-  app.get('/', (_, res) => res.redirect('/admin/'));
-  const infer = inferenceRouter(store);
+  // Dashboard HTML is served with the running build version injected
+  // server-side, so the brand line is correct even when the
+  // /admin/api/version fetch cannot run (remote access is loopback-gated,
+  // subpath proxies, blocked JS). The fetch in index.html stays as fallback.
+  const publicDir = path.join(here, '../public');
+  const serveDashboard = (_, res) => {
+    try {
+      const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
+        .replaceAll('__UWU_APP_VERSION__', `v${getAppVersion()}`);
+      res.set('Cache-Control', 'no-store').type('html').send(html);
+    } catch {
+      res.sendFile(path.join(publicDir, 'index.html'));
+    }
+  };
+  app.get('/admin/', serveDashboard);
+  app.get('/admin/index.html', serveDashboard);
+  app.use('/admin', express.static(publicDir));
+  app.get('/', (_, res) => res.redirect('/admin/'));  const infer = inferenceRouter(store);
   app.use('/v1', infer); app.use('/', infer);
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
