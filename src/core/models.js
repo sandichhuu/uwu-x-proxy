@@ -40,10 +40,14 @@ export function getAccountRemainingQuota(account, upstreamId) {
 
 export function resolveModel(store, publicId, effort) {
   if (typeof publicId !== 'string' || !publicId) throw bad('model is required');
-  // API Routes and model cards are independent registries. Prefer a public route,
-  // while retaining direct model-card lookup for backward compatibility.
-  const model = store.list('routes').find(x => x.id === publicId && x.enabled !== false)
-    || store.list('models').find(x => x.id === publicId && x.enabled !== false);
+  // API Routes and model cards are independent registries. This mirrors
+  // GET /models and DSH: once any route exists, only routes are public.
+  // Falling back to model cards here would let prefix-less ids
+  // (e.g. `gemini-3.8-flash-medium` instead of `google/gemini-3.8-flash`)
+  // bypass the route registry, which is not desired.
+  const routes = store.list('routes');
+  const model = routes.find(x => x.id === publicId && x.enabled !== false)
+    || (routes.length === 0 ? store.list('models').find(x => x.id === publicId && x.enabled !== false) : undefined);
   if (!model) throw Object.assign(new Error('Unknown model'), { status: 404 });
   const config = model.effort || { mode: 'unsupported' };
   const isVariant = config.mode === 'variant';

@@ -180,24 +180,25 @@ export function adminRouter(store) {
           name: 'Claude Sonnet 4.6',
           provider: 'google',
           upstreamId: 'claude-sonnet-4-6',
-         effort: {
-           mode: 'variant',
-           default: 'medium',
-           supported: ['low', 'medium', 'high'],
-           variants: {
-             low: 'claude-sonnet-4-6',
-             medium: 'claude-sonnet-4-6',
-             high: 'claude-sonnet-4-6-thinking'
-           }
-         },
-         variants: {
-           low: 'claude-sonnet-4-6',
-           medium: 'claude-sonnet-4-6',
-           high: 'claude-sonnet-4-6-thinking'
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
+          effort: {
+            mode: 'forward',
+            supported: []
+          },
+          enabled: true,
+          strategy: 'round-robin'
+        },
+        {
+          id: 'google/claude-opus-4-6-thinking',
+          name: 'Claude Opus 4.6 Thinking',
+          provider: 'google',
+          upstreamId: 'claude-opus-4-6-thinking',
+          effort: {
+            mode: 'forward',
+            supported: []
+          },
+          enabled: true,
+          strategy: 'round-robin'
+        },
         {
           id: 'openai/gpt-5.6-sol',
           name: 'GPT-5.6 Sol',
@@ -253,6 +254,7 @@ export function adminRouter(store) {
         'gemini-3.7-flash': 'google/gemini-3.7-flash',
         'gemini-3.6-flash': 'google/gemini-3.6-flash',
         'claude-sonnet-4-6': 'google/claude-sonnet-4-6',
+        'claude-opus-4-6-thinking': 'google/claude-opus-4-6-thinking',
         'gpt-5.6-sol': 'openai/gpt-5.6-sol',
         'gpt-5.6-terra': 'openai/gpt-5.6-terra',
         'gpt-5.6-luna': 'openai/gpt-5.6-luna',
@@ -275,6 +277,15 @@ export function adminRouter(store) {
           if (existing.strategy) route.strategy = existing.strategy;
         }
         store.upsert('routes', route);
+        // upsert() merges keys, so a previous variant -> forward migration
+        // must drop the stale `variants` map explicitly.
+        if (!route.variants) {
+          const stored = store.list('routes').find(r => r.id === route.id);
+          if (stored && stored.variants !== undefined) {
+            delete stored.variants;
+            try { store.save?.(); } catch { /* in-memory test store has no save */ }
+          }
+        }
         if (legacyId) store.remove('routes', legacyId);
       }
 
@@ -348,6 +359,38 @@ export function adminRouter(store) {
       // Final sweep: drop any leftover legacy default ids superseded by prefixed ones.
       for (const [legacyId, newId] of Object.entries(legacyDefaultIds)) {
         if (store.list('routes').some(r => r.id === newId)) store.remove('routes', legacyId);
+      }
+      // Prune known-phantom defaults: `claude-sonnet-4-6-thinking` never
+      // existed upstream (Google answers HTTP 404 `Requested entity was not
+      // found`), but older Auto Map runs created a route for it. Remove both
+      // the prefixed and the legacy unprefixed ids.
+      for (const phantomId of ['google/claude-sonnet-4-6-thinking', 'claude-sonnet-4-6-thinking']) {
+        store.remove('routes', phantomId);
+      }
+      // Group routes by provider so the same provider stays adjacent:
+      // google -> openai -> endpoint (per endpointId) -> custom. Stable sort
+      // keeps defaultRoutes order and user order inside each group.
+      {
+        const all = store.list('routes');
+        const groupOf = r => {
+          if (r.provider?.startsWith('google')) return { rank: 0, sub: '' };
+          if (r.provider?.startsWith('openai')) return { rank: 1, sub: '' };
+          const refs = [
+            ...(r.endpointIds || (r.endpointId ? [r.endpointId] : [])),
+            ...((r.sources || []).filter(s => s.endpointId).map(s => s.endpointId))
+          ];
+          if (refs.length) return { rank: 2, sub: String(refs[0]) };
+          return { rank: 3, sub: '' };
+        };
+        const decorated = all.map((r, index) => ({ r, index, g: groupOf(r) }));
+        decorated.sort((a, b) => (a.g.rank - b.g.rank) || (a.g.sub < b.g.sub ? -1 : a.g.sub > b.g.sub ? 1 : 0) || (a.index - b.index));
+        const sorted = decorated.map(d => d.r);
+        const sameOrder = sorted.every((r, i) => all[i] === r || all[i]?.id === r.id);
+        if (!sameOrder) {
+          if (Array.isArray(store.data?.routes)) store.data.routes = sorted;
+          else { all.splice(0, all.length, ...sorted); }
+          try { store.save?.(); } catch { /* in-memory test store has no save */ }
+        }
       }
       res.json({ ok: true, count: defaultRoutes.length + endpointCount, routes: store.list('routes') });
    } catch (e) { next(e); }

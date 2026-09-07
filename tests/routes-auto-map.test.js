@@ -52,7 +52,7 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   const first = await post('/admin/api/routes/auto-map');
   assert.equal(first.status, 200);
   const data = await first.json();
-  assert.equal(data.count, 8 + 1);
+  assert.equal(data.count, 9 + 1);
   const epRoute = store.list('routes').find(r => r.id === 'ollama/llama3.2:latest');
   assert.ok(epRoute);
   assert.deepEqual(epRoute.effort, { mode: 'forward', supported: [] });
@@ -63,6 +63,9 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   assert.deepEqual(store.data.accounts, accountsBefore);
   assert.deepEqual(store.data.endpoints, endpointsBefore);
   assert.equal(resolveModel(store, 'ollama/llama3.2:latest').endpoint.id, 'ep_ollama');
+  // Once routes exist, raw model cards are no longer requestable directly.
+  assert.throws(() => resolveModel(store, 'llama3.2:latest'), /Unknown model/);
+  assert.throws(() => resolveModel(store, 'my-account-model'), /Unknown model/);
 
   // Customized routes survive a second run; nothing is duplicated.
   store.upsert('routes', { ...epRoute, strategy: 'smart' });
@@ -99,6 +102,23 @@ test('auto-map renames endpoint routes after the endpoint is renamed', async t =
   assert.equal(renamed.strategy, 'smart', 'customizations survive the rename');
   assert.equal(resolveModel(store, 'my_server/llama3.2:latest').endpoint.id, 'ep_ollama');
   assert.throws(() => resolveModel(store, 'ollama/llama3.2:latest'), /Unknown model/);
+});
+
+test('raw upstream ids are not requestable once routes exist', t => {
+  const store = memory();
+  store.data.accounts.push({ id: 'acc', provider: 'google', enabled: true });
+  // Model cards exist before any route (e.g. fetched account models).
+  store.data.models.push(
+    { id: 'gemini-3.8-flash-medium', provider: 'google', upstreamId: 'gemini-3.8-flash-medium', enabled: true }
+  );
+  // No routes yet: model cards stay requestable (backward compat / fresh setup).
+  assert.equal(resolveModel(store, 'gemini-3.8-flash-medium').upstreamId, 'gemini-3.8-flash-medium');
+  // A prefixed route exists: only the route id is public now.
+  store.data.routes.push(
+    { id: 'google/gemini-3.8-flash', provider: 'google', upstreamId: 'gemini-3.8-flash-medium', effort: { mode: 'forward', supported: [] }, enabled: true }
+  );
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash').upstreamId, 'gemini-3.8-flash-medium');
+  assert.throws(() => resolveModel(store, 'gemini-3.8-flash-medium'), /Unknown model/);
 });
 
 test('dsh install omits reasoningEffort but keeps reasoningEfforts', t => {

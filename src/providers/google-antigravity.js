@@ -54,7 +54,6 @@ export const isAllowedGoogleModel = id => /^(?:gemini-3\.[678]-flash-.+|claude-.
 
 export const FALLBACK_GOOGLE_MODELS = [
   'claude-opus-4-6-thinking',
-  'claude-sonnet-4-6-thinking',
   'claude-sonnet-4-6',
   'gemini-3.8-flash-high',
   'gemini-3.8-flash-medium',
@@ -217,27 +216,27 @@ export async function discoverGoogle(store, account) {
       } : null
     }));
 
-  // Ensure claude-sonnet-4-6-thinking is exposed (matching sample project)
-  const sonnetBase = models.find(m => m.id === 'claude-sonnet-4-6');
-  if (sonnetBase && !models.some(m => m.id === 'claude-sonnet-4-6-thinking')) {
-    models.push({
-      id: 'claude-sonnet-4-6-thinking',
-      name: 'Claude Sonnet 4.6 (Thinking)',
-      upstreamId: 'claude-sonnet-4-6',
-      quota: sonnetBase.quota
-    });
-  }
-
   // If upstream discovery returned empty, populate with fallback models
   if (models.length === 0) {
     for (const id of FALLBACK_GOOGLE_MODELS) {
       models.push({
         id,
         name: id,
-        upstreamId: id === 'claude-sonnet-4-6-thinking' ? 'claude-sonnet-4-6' : id,
+        upstreamId: id,
         quota: null
       });
     }
+  }
+
+  // NOTE: `claude-sonnet-4-6-thinking` is intentionally NOT synthesized here.
+  // Upstream answers it with HTTP 404 `Requested entity was not found`, so it
+  // must never be exposed as a card/route. Only expose ids upstream returns
+  // (plus the offline fallback list above, which contains verified ids only).
+  // `claude-opus-4-6-thinking` below is kept because that id is confirmed live.
+  if (!models.some(m => m.id === 'claude-opus-4-6-thinking')
+    && models.some(m => m.id.startsWith('claude-'))) {
+    const quota = models.find(m => m.id.startsWith('claude-'))?.quota ?? null;
+    models.push({ id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', upstreamId: 'claude-opus-4-6-thinking', quota });
   }
 
   const quotaMap = Object.fromEntries(models.map(x => [x.id, x.quota]));

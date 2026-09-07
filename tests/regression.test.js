@@ -545,9 +545,12 @@ test('Google Antigravity discoverGoogle exposes only gemini-3.6-flash-*, gemini-
     assert.ok(isAllowedGoogleModel(m.id), `Model ${m.id} should match allowed pattern`);
   }
 
-  const thinkingSonnet = models.find(m => m.id === 'claude-sonnet-4-6-thinking');
-  assert.ok(thinkingSonnet, 'claude-sonnet-4-6-thinking must be exposed');
-  assert.equal(thinkingSonnet.upstreamId, 'claude-sonnet-4-6');
+  // `claude-sonnet-4-6-thinking` does not exist upstream (HTTP 404
+  // `Requested entity was not found`) and must never be exposed.
+  assert.ok(!models.some(m => m.id === 'claude-sonnet-4-6-thinking'), 'claude-sonnet-4-6-thinking must NOT be exposed');
+  const thinkingOpus = models.find(m => m.id === 'claude-opus-4-6-thinking');
+  assert.ok(thinkingOpus, 'claude-opus-4-6-thinking must be exposed');
+  assert.equal(thinkingOpus.upstreamId, 'claude-opus-4-6-thinking');
 
   const flash38 = models.find(m => m.id === 'gemini-3.8-flash-high');
   assert.ok(flash38, 'gemini-3.8-flash-high must be present');

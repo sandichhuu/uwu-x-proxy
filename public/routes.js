@@ -519,7 +519,7 @@ export function routesPanel(parent, { api, el, error }) {
     try {
       const res = await api('routes/auto-map', { method: 'POST' });
       await loadRoutes();
-      setFeedback('Auto-mapped ' + (res.count || 8) + ' API routes successfully.');
+      setFeedback('Auto-mapped ' + (res.count || 9) + ' API routes successfully.');
     } catch (e) {
       setFeedback(e, true);
     } finally {
