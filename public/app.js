@@ -79,6 +79,7 @@ function requests(parent, rows) {
   table(parent, [
     ['Time', r => new Date(r.at).toLocaleString()], ['Model', r => r.model],
     ['Status', r => el('span', r.status, null, `pill${r.status >= 400 ? ' error' : ''}`)],
+    ['Error', r => r.error || '-'],
     ['Latency', r => r.latencyMs == null ? '-' : `${number(r.latencyMs)} ms`], ['Tokens', r => number(r.tokens)]
   ], rows);
 }

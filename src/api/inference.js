@@ -10,6 +10,29 @@ import { anthropicToGemini, openAIToGemini, geminiToAnthropic, geminiToOpenAI, s
 import { anthropicToResponses, responsesToAnthropic, readCompletedResponse, streamCodexToAnthropic } from '../providers/codex-converter.js';
 import { anthropicToOpenAI, openAIToAnthropic, effortFrom } from '../core/protocols.js';
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
+// Upstream error bodies used to be cancelled unseen, so a 400 from upstream
+// surfaced as a bare "Upstream returned HTTP 400" with no cause in the
+// response or the logs. Read a bounded snippet and extract the embedded
+// message (OpenAI-style {error:{message}}, {error: string}, {message}),
+// falling back to truncated raw text.
+async function upstreamDetail(upstream, limit = 2000) {
+  try {
+    const text = await upstream.text();
+    if (!text) return '';
+    try {
+      const data = JSON.parse(text);
+      const msg = data?.error?.message || (typeof data?.error === 'string' ? data.error : '') || data?.message || '';
+      if (msg && typeof msg === 'string') return msg.slice(0, 500);
+    } catch { /* Not JSON: fall through to the raw snippet below. */ }
+    return text.replace(/\s+/g, ' ').trim().slice(0, 500);
+  } catch { return ''; }
+}
+async function throwUpstream(upstream) {
+  const status = upstream.status;
+  const detail = await upstreamDetail(upstream);
+  try { await upstream.body?.cancel().catch(() => {}); } catch { /* Body already consumed. */ }
+  throw fail(detail ? `Upstream returned HTTP ${status}: ${detail}` : `Upstream returned HTTP ${status}`, status);
+}
 function error(res, e, anthropic = false) {
   if (res.headersSent) return res.destroy();
   const status = e.status || 502;
@@ -126,7 +149,7 @@ function createAnthropicStream(publicId) {
 }
 export async function run(store, req, res, kind) {
   const started = Date.now(), controller = new AbortController();
-  let timer, status = 502, tokens, resolved;
+  let timer, status = 502, tokens, resolved, errMsg;
   const onClose = () => { if (!res.writableEnded) controller.abort(); };
   res.on('close', onClose);
   try {
@@ -149,10 +172,7 @@ export async function run(store, req, res, kind) {
       const wantStream = body.stream === true;
       const inner = kind === 'anthropic' ? anthropicToGemini(body, resolved) : openAIToGemini(body, resolved);
       const upstream = await executeGoogle(store, resolved.account, inner, resolved.upstreamId, controller.signal, { stream: wantStream });
-      if (!upstream.ok) {
-        await upstream.body?.cancel().catch(() => {});
-        throw fail(`Upstream returned HTTP ${upstream.status}`, upstream.status);
-      }
+      if (!upstream.ok) throw await throwUpstream(upstream);
       if (wantStream) {
         if (!isSse(upstream)) { await upstream.body?.cancel().catch(() => {}); throw new Error('Expected SSE'); }
         res.set({ 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -173,10 +193,7 @@ export async function run(store, req, res, kind) {
       const wantStream = body.stream === true;
       const payload = anthropicToResponses(body, resolved);
       const upstream = await executeCodex(store, resolved.account, payload, controller.signal);
-      if (!upstream.ok) {
-        await upstream.body?.cancel().catch(() => {});
-        throw fail(`Upstream returned HTTP ${upstream.status}`, upstream.status);
-      }
+      if (!upstream.ok) throw await throwUpstream(upstream);
       if (wantStream) {
         if (!isSse(upstream)) { await upstream.body?.cancel().catch(() => {}); throw new Error('Expected SSE'); }
         res.set({ 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -206,10 +223,7 @@ export async function run(store, req, res, kind) {
       }
       const route = nativeAnthropic ? 'messages' : kind === 'responses' ? 'responses' : 'chat/completions';
       const upstream = await executeOpenAI(resolved.endpoint, payload, controller.signal, route);
-      if (!upstream.ok) {
-        await upstream.body?.cancel().catch(() => {});
-        throw fail(`Upstream returned HTTP ${upstream.status}`, upstream.status);
-      }
+      if (!upstream.ok) throw await throwUpstream(upstream);
       if (payload.stream) {
         if (!isSse(upstream)) { await upstream.body?.cancel().catch(() => {}); throw new Error('Expected SSE'); }
         res.set({ 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -226,12 +240,15 @@ export async function run(store, req, res, kind) {
     status = 200;
   } catch (e) {
     status = controller.signal.aborted ? 504 : e.status || 502;
-    if (status >= 500) console.error(`[inference] model=${req.body?.model} upstream=${resolved?.upstreamId} status=${status}: ${e.message}`);
+    errMsg = typeof e.message === 'string' ? e.message : 'Request failed';
+    // Upstream 4xx (e.g. "free tier can only be used in OpenCode") used to be
+    // silent here; log any upstream failure so the cause is visible server-side.
+    if (status >= 500 || (typeof e.message === 'string' && e.message.startsWith('Upstream returned HTTP'))) console.error(`[inference] model=${req.body?.model} upstream=${resolved?.upstreamId} status=${status}: ${e.message}`);
     if (!res.destroyed) error(res, { status, message: e.message, upstreamStatus: e.upstreamStatus }, kind === 'anthropic');
   }
   finally {
     clearTimeout(timer); res.off('close', onClose);
-    try { store.record({ at: new Date().toISOString(), model: req.body?.model, upstream: resolved?.upstreamId, effort: resolved?.effort, status, latencyMs: Date.now() - started, tokens }); } catch { /* Logging failure must not change a committed response. */ }
+    try { store.record({ at: new Date().toISOString(), model: req.body?.model, upstream: resolved?.upstreamId, effort: resolved?.effort, status, latencyMs: Date.now() - started, tokens, ...(status >= 400 && errMsg ? { error: String(errMsg).slice(0, 500) } : {}) }); } catch { /* Logging failure must not change a committed response. */ }
   }
 }
 export function inferenceRouter(store) {
