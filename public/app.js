@@ -465,9 +465,10 @@ function modelsPanel(root, data) {
 async function page(name) {
   if (!descriptions[name]) name = 'analytics';
   currentPage = name; const token = ++generation;
-  title.textContent = name[0].toUpperCase() + name.slice(1);
-  document.title = `${title.textContent} - uwu-x-proxy`;
-  document.querySelector('#breadcrumb').textContent = name.toUpperCase(); document.querySelector('#subtitle').textContent = descriptions[name];
+  const displayName = name === 'install' ? 'Integrate' : name[0].toUpperCase() + name.slice(1);
+  title.textContent = displayName;
+  document.title = `${displayName} - uwu-x-proxy`;
+  document.querySelector('#breadcrumb').textContent = displayName.toUpperCase(); document.querySelector('#subtitle').textContent = descriptions[name];
   document.querySelectorAll('[data-page]').forEach(b => { b.classList.toggle('active', b.dataset.page === name); if (b.dataset.page === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
   const root = el('div'); content.replaceChildren(root); content.setAttribute('aria-busy', 'true');
   el('div', 'Loading your workspace...', root, 'loading');
