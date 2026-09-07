@@ -9,8 +9,23 @@ Unified proxy compatible with both **OpenAI** and **Anthropic** APIs. Root (`/`)
 
 Requirements: **Node.js 18+**.
 
+Run directly (no install needed):
+
 ```bash
-npm i uwu-x-proxy
+npx uwu-x-proxy
+```
+
+Or install globally:
+
+```bash
+npm i -g uwu-x-proxy
+uwu-x-proxy
+```
+
+Wait until you see:
+
+```text
+uwu-x-proxy listening on http://127.0.0.1:3081
 ```
 
 Then open the dashboard in your browser:
@@ -19,9 +34,9 @@ Then open the dashboard in your browser:
 http://localhost:3081
 ```
 
-On Windows you can also double-click `run.bat` (installs dependencies on first run and starts the server on `HOST:PORT`, default `127.0.0.1:3081`).
-
-> Custom host/port: `PORT=3081 HOST=127.0.0.1 node src/index.js`
+> Custom host/port: `PORT=3081 HOST=127.0.0.1 npx uwu-x-proxy`
+>
+> From source: clone the repo and double-click `run.bat` on Windows, or run `npm install` then `npm start`.
 
 ## Features
 

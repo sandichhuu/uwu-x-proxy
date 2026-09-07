@@ -1,6 +1,6 @@
 {
   "name": "uwu-x-proxy",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Unified OpenAI and Anthropic compatible proxy.",
   "type": "module",
   "main": "src/index.js",
