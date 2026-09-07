@@ -83,6 +83,28 @@ function requests(parent, rows) {
     ['Latency', r => r.latencyMs == null ? '-' : `${number(r.latencyMs)} ms`], ['Tokens', r => number(r.tokens)]
   ], rows);
 }
+function requestLogs(parent, rows) {
+  if (!rows.length) return empty(parent, 'Nothing here yet', 'New activity will appear here when it is available.');
+  const list = el('div', undefined, parent, 'request-log-list');
+  rows.forEach(r => {
+    const item = el('article', undefined, list, 'request-log-item');
+    const summary = el('div', undefined, item, 'request-log-summary');
+    const fields = [
+      ['Time', new Date(r.at).toLocaleString()], ['Model', r.model || '-'], ['Status', r.status],
+      ['Latency', r.latencyMs == null ? '-' : `${number(r.latencyMs)} ms`], ['Tokens', number(r.tokens)]
+    ];
+    fields.forEach(([label, value]) => {
+      const field = el('div', undefined, summary, 'request-log-field');
+      el('span', label, field, 'request-log-label');
+      if (label === 'Status') field.append(el('span', value, null, `pill${value >= 400 ? ' error' : ''}`));
+      else el('strong', value, field);
+    });
+    const details = el('details', undefined, item, 'request-error-detail');
+    el('summary', r.error ? 'Error details' : 'No error details', details);
+    el('pre', r.error || 'This request completed without a recorded error.', details, 'request-error-text');
+    if (!r.error) details.classList.add('no-error');
+  });
+}
 function legend(parent, label, color, value) {
   const row = el('div', undefined, parent, 'legend-row'); el('span', undefined, row, 'dot').style.background = color;
   el('span', label, row, 'label'); if (value !== undefined) el('strong', value, row);
@@ -522,7 +544,7 @@ async function page(name) {
     if (token !== generation) return;
     root.replaceChildren();
     if (name === 'analytics') dashboard(root, data);
-    else if (name === 'logs') requests(card(root, 'Request log', 'Latest 50 retained requests  -  newest first'), data.recent);
+    else if (name === 'logs') requestLogs(card(root, 'Request log', 'Latest 50 retained requests  -  newest first'), data.recent);
     else if (name === 'models') modelsPanel(root, data);
     else await integration(root, data);
   } catch (e) { if (token === generation) { root.replaceChildren(); error(root, e); const retry = el('button', 'Try again', root); retry.onclick = () => page(name); } }

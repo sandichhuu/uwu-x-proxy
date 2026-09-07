@@ -1,9 +1,48 @@
 import { assertSafeUrl, safeFetch } from '../security/network.js';
+// Additional headers are ONLY for API Endpoints (OpenAI/Anthropic-compatible
+// custom endpoints). Google / OpenAI account providers never go through here.
+// Managed hop-by-hop / auth headers stay blocked so callers cannot override
+// authorization, content framing, or anthropic-version handling.
+const ALLOWED_ENDPOINT_HEADERS = new Set([
+  'accept',
+  'openai-organization',
+  'openai-project',
+  'anthropic-beta',
+  // OpenRouter app attribution (agentic-harness allowlist, e.g. inkling :free).
+  'http-referer',
+  'referer',
+  'x-title',
+  'x-openrouter-title',
+  'user-agent',
+]);
+const BLOCKED_ENDPOINT_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'anthropic-version',
+  'content-type',
+  'content-length',
+  'host',
+  'connection',
+  'keep-alive',
+  'transfer-encoding',
+  'upgrade',
+]);
+function isAllowedEndpointHeader(name) {
+  const lower = String(name).toLowerCase();
+  if (BLOCKED_ENDPOINT_HEADERS.has(lower)) return false;
+  if (ALLOWED_ENDPOINT_HEADERS.has(lower)) return true;
+  // Generic custom X- headers (e.g. X-Custom-..., X-OpenRouter-...) are allowed
+  // so users can attach provider-specific attribution without touching core.
+  if (lower.startsWith('x-') && /^[a-z0-9-]+$/.test(lower)) return true;
+  return false;
+}
 export function endpointHeaders(endpoint) {
   const headers = { 'content-type': 'application/json' };
   for (const [key, value] of Object.entries(endpoint.headers || {})) {
-    if (!['accept', 'openai-organization', 'openai-project', 'anthropic-beta'].includes(key.toLowerCase())) throw Object.assign(new Error('Unsupported endpoint header'), { status: 400 });
-    headers[key] = value;
+    if (typeof key !== 'string' || !/^[A-Za-z0-9-]+$/.test(key) || key.length > 64 || !isAllowedEndpointHeader(key)) throw Object.assign(new Error('Unsupported endpoint header'), { status: 400 });
+    if (typeof value !== 'string' || !value.trim() || value.length > 2000 || /[\r\n]/.test(value)) throw Object.assign(new Error('Invalid endpoint header value'), { status: 400 });
+    headers[key] = value.trim();
   }
   if (endpoint.protocol === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01';

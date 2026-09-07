@@ -179,24 +179,107 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
   formWrap.style.display = rows.length === 0 ? 'block' : 'none';
 
   const form = el('form', undefined, formWrap, 'connection-form compact');
+  form.style.maxWidth = '900px';
   const formTitle = el('h3', 'Add New Endpoint Record', form);
 
-  function field(label, type, placeholder, required = false) {
-    const wrap = el('label', label, form), input = el('input', undefined, wrap);
+  const formCols = el('div', undefined, form);
+  formCols.style.display = 'grid';
+  formCols.style.gridTemplateColumns = 'repeat(auto-fit, minmax(260px, 1fr))';
+  formCols.style.gap = '14px';
+  formCols.style.gridColumn = '1/-1';
+  const leftCol = el('div', undefined, formCols);
+  leftCol.style.display = 'grid';
+  leftCol.style.gap = '10px';
+  leftCol.style.alignContent = 'start';
+  const rightCol = el('div', undefined, formCols);
+  rightCol.style.display = 'grid';
+  rightCol.style.gap = '10px';
+  rightCol.style.alignContent = 'start';
+
+  function field(parent, label, type, placeholder, required = false) {
+    const wrap = el('label', label, parent), input = el('input', undefined, wrap);
     input.type = type; input.placeholder = placeholder; input.required = required; return input;
   }
 
-  const nameInput = field('Endpoint name', 'text', 'My Ollama', true);
-  const baseUrlInput = field('Base URL (including /v1)', 'url', 'http://localhost:11434/v1', true);
-  const apiKeyInput = field('API key (optional)', 'password', 'Not required for local Ollama');
+  const nameInput = field(leftCol, 'Endpoint name', 'text', 'My Ollama', true);
+  const baseUrlInput = field(leftCol, 'Base URL (including /v1)', 'url', 'http://localhost:11434/v1', true);
+  const apiKeyInput = field(leftCol, 'API key (optional)', 'password', 'Not required for local Ollama');
   apiKeyInput.autocomplete = 'new-password';
+
+  const HEADER_PRESETS = {
+    'OpenCode': { 'HTTP-Referer': 'https://opencode.ai', 'X-Title': 'OpenCode' },
+    'DeepSeek Harness': { 'HTTP-Referer': 'https://github.com/deepseek-ai/deepseek-harness', 'X-Title': 'DeepSeek Harness' },
+  };
+  const presetWrap = el('label', 'Header preset', leftCol);
+  const presetSelect = el('select', undefined, presetWrap);
+  presetSelect.style.width = '100%';
+  presetSelect.style.padding = '7px 10px';
+  presetSelect.style.fontSize = '13px';
+  presetSelect.style.borderRadius = '6px';
+  presetSelect.style.background = 'var(--surface)';
+  presetSelect.style.border = '1px solid var(--border)';
+  presetSelect.style.color = 'var(--text)';
+  for (const presetName of ['None', ...Object.keys(HEADER_PRESETS), 'Custom']) {
+    const opt = el('option', presetName, presetSelect);
+    opt.value = presetName;
+  }
+
+  const headersWrap = el('label', 'Additional headers (JSON, optional)', rightCol);
+  const headersInput = el('textarea', undefined, headersWrap);
+  headersInput.placeholder = '{"HTTP-Referer": "https://opencode.ai", "X-Title": "OpenCode"}';
+  headersInput.rows = 5;
+  headersInput.style.width = '100%';
+  headersInput.style.fontFamily = 'monospace';
+  headersInput.style.resize = 'vertical';
+  headersInput.spellcheck = false;
+  headersInput.autocomplete = 'off';
+  headersInput.setAttribute('autocorrect', 'off');
+  headersInput.setAttribute('autocapitalize', 'off');
+  el('small', 'API Endpoints only. Custom JSON headers (HTTP-Referer + X-Title for OpenRouter).', headersWrap, 'muted');
+
+  function presetForHeaders(headers) {
+    if (!headers || !Object.keys(headers).length) return 'None';
+    for (const [name, preset] of Object.entries(HEADER_PRESETS)) {
+      const keys = Object.keys(preset);
+      if (keys.length === Object.keys(headers).length && keys.every(k => headers[k] === preset[k])) return name;
+    }
+    return 'Custom';
+  }
+  function syncHeadersVisibility() {
+    const isCustom = presetSelect.value === 'Custom';
+    rightCol.style.display = isCustom ? '' : 'none';
+  }
+  presetSelect.onchange = syncHeadersVisibility;
+  presetSelect.value = 'None';
+  syncHeadersVisibility();
+
+  function parseHeadersInput() {
+    if (presetSelect.value === 'None') return {};
+    if (presetSelect.value !== 'Custom') return { ...HEADER_PRESETS[presetSelect.value] };
+    const raw = (headersInput.value || '').trim();
+    if (!raw) return {};
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('Additional headers must be valid JSON object');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Additional headers must be a JSON object');
+    return parsed;
+  }
 
   const formActions = el('div', undefined, form, 'tabs');
   formActions.style.marginBottom = '0';
-  const saveBtn = el('button', 'Save endpoint', formActions, 'primary sm');
+  formActions.style.marginTop = '6px';
+  formActions.style.justifyContent = 'flex-end';
+  const saveBtn = el('button', 'Save endpoint', formActions, 'primary');
   saveBtn.type = 'submit';
-  const cancelBtn = el('button', 'Cancel', formActions, 'secondary sm');
+  saveBtn.style.padding = '10px 20px';
+  saveBtn.style.fontSize = '14px';
+  const cancelBtn = el('button', 'Cancel', formActions, 'secondary');
   cancelBtn.type = 'button';
+  cancelBtn.style.padding = '10px 20px';
+  cancelBtn.style.fontSize = '14px';
 
   function resetEndpointForm() {
     editingId = null;
@@ -206,6 +289,9 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
     baseUrlInput.value = '';
     apiKeyInput.value = '';
     apiKeyInput.placeholder = 'Not required for local Ollama';
+    presetSelect.value = 'None';
+    headersInput.value = '';
+    syncHeadersVisibility();
   }
 
   function startAddEndpoint() {
@@ -222,6 +308,16 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
     baseUrlInput.value = ep.baseUrl || '';
     apiKeyInput.value = '';
     apiKeyInput.placeholder = 'Leave blank to keep existing key';
+    try {
+      presetSelect.value = presetForHeaders(ep.headers);
+      headersInput.value = presetSelect.value === 'Custom' && ep.headers && Object.keys(ep.headers).length
+        ? JSON.stringify(ep.headers, null, 2)
+        : '';
+    } catch {
+      presetSelect.value = 'Custom';
+      headersInput.value = '';
+    }
+    syncHeadersVisibility();
     formWrap.style.display = 'block';
     nameInput.focus();
   }
@@ -459,8 +555,15 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
       const name = nameInput.value.trim();
       const baseUrl = baseUrlInput.value.trim();
       const apiKeyValue = apiKeyInput.value;
+      let headers;
+      try {
+        headers = parseHeadersInput();
+      } catch (err) {
+        error(parent, err);
+        return;
+      }
       if (editingId) {
-        const payload = { name, baseUrl };
+        const payload = { name, baseUrl, headers };
         if (apiKeyValue) payload.apiKey = apiKeyValue;
         const updated = await api(`endpoints/${encodeURIComponent(editingId)}`, {
           method: 'PATCH',
@@ -484,6 +587,7 @@ export function endpointsPanel(parent, rows, { api, el, error, table, enabled })
           baseUrl,
           protocol: 'openai',
           apiKey: apiKeyValue || undefined,
+          headers,
           allowPrivate: true
         })
       });

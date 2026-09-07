@@ -228,3 +228,17 @@ button.sm{padding:4px 9px;font-size:12px;border-radius:6px;line-height:1.3}
 }
 
 
+
+/* Logs: request metadata remains compact; the error body is separately expandable. */
+.request-log-list{display:grid;gap:12px}
+.request-log-item{border:1px solid #eee7dc;border-radius:10px;overflow:hidden}
+.request-log-summary{display:grid;grid-template-columns:1.4fr minmax(150px,2fr) repeat(3,minmax(90px,auto));gap:12px;padding:13px 15px;align-items:center}
+.request-log-field{min-width:0;display:grid;gap:2px}
+.request-log-label{color:var(--muted);font-size:10px;letter-spacing:.8px;text-transform:uppercase}
+.request-log-field strong{font-size:12px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.request-error-detail{border-top:1px solid #eee7dc;background:var(--bg)}
+.request-error-detail summary{cursor:pointer;padding:10px 15px;font-size:12px;font-weight:550;color:#ab422c;user-select:none}
+.request-error-detail.no-error summary{color:var(--muted)}
+.request-error-text{margin:0;padding:0 15px 15px;background:transparent;border-radius:0;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;color:#993e28}
+.request-error-detail.no-error .request-error-text{color:var(--muted)}
+@media(max-width:800px){.request-log-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}

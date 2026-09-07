@@ -651,22 +651,65 @@ export function inferencePanel(parent, { api, el, error }) {
 
   async function loadModels() {
     try {
-      const [routes, models] = await Promise.all([
+      // Inference chỉ chọn trong Routes (registry public). Models là thẻ
+      // nguồn phía dưới, không hiện trực tiếp ở đây.
+      const [routes, endpoints, accounts] = await Promise.all([
         api('routes').catch(() => []),
-        api('models').catch(() => [])
+        api('endpoints').catch(() => []),
+        api('accounts').catch(() => [])
       ]);
 
-      const activeRoutes = (routes || []).filter(r => r.enabled !== false);
-      const activeModels = (models || []).filter(m => m.enabled !== false);
-
-      const list = [...activeRoutes];
-      for (const m of activeModels) {
-        if (!list.some(r => r.id === m.id)) {
-          list.push(m);
+      const endpointNameById = new Map((endpoints || []).map(e => [e.id, e.name || e.id]));
+      const enabledEndpointIds = new Set((endpoints || []).filter(e => e.enabled !== false).map(e => e.id));
+      const enabledAccountById = new Map((accounts || []).filter(a => a.enabled !== false).map(a => [a.id, a]));
+      const hasEnabledAccount = (provider, accountIds) => {
+        const prov = (provider || '').startsWith('google') ? 'google' : (provider || '').startsWith('openai') ? 'openai' : provider;
+        const pool = (accounts || []).filter(a => a.enabled !== false && (!prov || a.provider === prov || a.provider?.startsWith(prov)));
+        if (!pool.length) return false;
+        if (accountIds?.length) return pool.some(a => accountIds.includes(a.id));
+        return true;
+      };
+      const hasEligibleAccountSide = (m) => {
+        const sources = (m.sources || []).filter(s => s.type === 'account' || s.provider);
+        if (m.provider) {
+          if (hasEnabledAccount(m.provider, m.accountIds)) return true;
         }
-      }
+        for (const s of sources) {
+          if (hasEnabledAccount(s.provider, s.accountIds)) return true;
+        }
+        if (m.accountIds?.length) {
+          if (m.accountIds.some(id => enabledAccountById.has(id))) return true;
+        }
+        return false;
+      };
+      const endpointIdsOf = (m) => {
+        const ids = [
+          ...(m.endpointIds || (m.endpointId ? [m.endpointId] : [])),
+          ...((m.sources || []).filter(s => s.endpointId).map(s => s.endpointId))
+        ];
+        return [...new Set(ids)];
+      };
+      const endpointLabelFor = (m) => {
+        const ids = endpointIdsOf(m);
+        const enabledNames = ids.map(id => enabledEndpointIds.has(id) ? endpointNameById.get(id) : null).filter(Boolean);
+        if (enabledNames.length === 1) return enabledNames[0];
+        if (enabledNames.length > 1) return enabledNames.join(', ');
+        const names = ids.map(id => endpointNameById.get(id)).filter(Boolean);
+        if (!names.length) return 'Endpoint';
+        if (names.length === 1) return names[0];
+        return names.join(', ');
+      };
+      // Ẩn route khi mọi endpoint mà nó tham chiếu đều đã disabled/xóa.
+      // Route thuần provider/account giữ nguyên để không làm trống list khi chưa có account.
+      const hasEligibleEndpointSide = (m) => endpointIdsOf(m).some(id => enabledEndpointIds.has(id));
+      const isSelectable = (m) => {
+        if (m.enabled === false) return false;
+        if (!endpointIdsOf(m).length) return true;
+        if (hasEligibleEndpointSide(m)) return true;
+        return hasEligibleAccountSide(m);
+      };
 
-      availableModels = list;
+      availableModels = (routes || []).filter(isSelectable);
       modelSelect.replaceChildren();
 
       if (availableModels.length === 0) {
@@ -697,7 +740,8 @@ export function inferencePanel(parent, { api, el, error }) {
       }
 
       for (const m of availableModels) {
-        const prov = m.provider ? (m.provider.includes('google') ? 'Google' : 'OpenAI') : (m.endpointId ? 'Endpoint' : '');
+        const hasEndpoint = endpointIdsOf(m).length > 0;
+        const prov = m.provider ? (m.provider.includes('google') ? 'Google' : 'OpenAI') : (hasEndpoint ? endpointLabelFor(m) : '');
         const label = prov ? (m.name || m.id) + ' (' + prov + ')' : (m.name || m.id);
         const opt = el('option', label, modelSelect);
         opt.value = m.id;
