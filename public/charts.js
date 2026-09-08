@@ -9,33 +9,63 @@ function svgNode(tag, attrs, parent, text) {
   if (text !== undefined) node.textContent = text;
   parent.append(node); return node;
 }
-export function trendChart(parent, points) {
-  const svg = svgNode('svg', { viewBox: '0 0 640 260', class: 'chart', role: 'img', 'aria-label': 'Requests and errors over time' }, parent);
-  svgNode('title', {}, svg, 'Usage trend: requests (orange) and errors (gold). Each point includes its count.');
-  const max = Math.max(4, ...points.map(p => p.requests));
+export function trendChart(parent, points, modelNames, tzOffsetMin = null) {
+  const multi = Array.isArray(modelNames) && modelNames.length > 0 && points.some(p => p.models && Object.keys(p.models).length > 0);
+  const lines = multi ? modelNames.map((name, i) => ({ key: name, color: COLORS[i % COLORS.length] })) : [{ key: 'requests', color: COLORS[0] }, { key: 'errors', color: COLORS[1] }];
+  const svg = svgNode('svg', { viewBox: '0 0 640 260', class: 'chart', role: 'img', 'aria-label': multi ? `Usage trend per model: ${modelNames.join(', ')}` : 'Requests and errors over time' }, parent);
+  svgNode('title', {}, svg, multi ? `Usage trend per model: ${modelNames.join(', ')}. Each point includes its count.` : 'Usage trend: requests (orange) and errors (gold). Each point includes its count.');
+  const valueOf = multi ? ((p, name) => p.models?.[name] || 0) : null;
+  // Fixed UTC-offset timezone (minutes east of UTC), or browser-local when null.
+  const tzOpt = tzOffsetMin == null ? {} : { timeZone: 'UTC' };
+  const inTz = ms => tzOffsetMin == null ? new Date(ms) : new Date(ms + tzOffsetMin * 60000);
+  const max = multi
+    ? Math.max(4, ...points.flatMap(p => modelNames.map(name => valueOf(p, name))))
+    : Math.max(4, ...points.map(p => p.requests));
   const x = i => 42 + i * 580 / Math.max(1, points.length - 1), y = n => 215 - n / max * 180;
   for (let i = 0; i <= 4; i++) {
     const value = max * i / 4;
     svgNode('line', { x1: 42, x2: 622, y1: y(value), y2: y(value), stroke: '#eae2d6', 'stroke-dasharray': '3 5' }, svg);
-    svgNode('text', { x: 30, y: y(value) + 4, 'text-anchor': 'end' }, svg, Math.round(value));
+    const tick = svgNode('text', { x: 30, y: y(value) + 4, 'text-anchor': 'end' }, svg, Math.round(value));
+    tick.style.fontSize = '11px'; tick.style.fill = '#6b675e';
   }
   const defs = svgNode('defs', {}, svg), gradient = svgNode('linearGradient', { id: 'trend-fill', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
   svgNode('stop', { offset: '0%', 'stop-color': COLORS[0], 'stop-opacity': '.18' }, gradient);
   svgNode('stop', { offset: '100%', 'stop-color': COLORS[0], 'stop-opacity': '0' }, gradient);
-  for (const [key, color] of [['requests', COLORS[0]], ['errors', COLORS[1]]]) {
-    const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i)},${y(p[key])}`).join(' ');
-    if (key === 'requests' && points.length) svgNode('path', { d: `${line} L622,215 L42,215 Z`, fill: 'url(#trend-fill)' }, svg);
-    svgNode('path', { d: line, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' }, svg);
-    points.forEach((p, i) => {
-      const dot = svgNode('circle', { cx: x(i), cy: y(p[key]), r: 3, fill: color }, svg);
-      svgNode('title', {}, dot, `${new Date(p.at).toLocaleString()}: ${p[key]} ${key}`);
-    });
+  // Catmull-Rom smoothing for softer lines; control points are clamped to
+  // the plot area so spikes never overshoot above/below the axis.
+  const fmt = n => Math.round(n * 10) / 10;
+  const clampY = n => Math.min(215, Math.max(30, n));
+  const smoothLine = pts => {
+    if (pts.length < 2) return pts.length ? `M${fmt(pts[0][0])},${fmt(pts[0][1])}` : '';
+    let d = `M${fmt(pts[0][0])},${fmt(pts[0][1])}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+      d += `C${fmt(p1[0] + (p2[0] - p0[0]) / 6)},${fmt(clampY(p1[1] + (p2[1] - p0[1]) / 6))} ${fmt(p2[0] - (p3[0] - p1[0]) / 6)},${fmt(clampY(p2[1] - (p3[1] - p1[1]) / 6))} ${fmt(p2[0])},${fmt(p2[1])}`;
+    }
+    return d;
+  };
+  const isFirst = key => (!multi && key === 'requests') || (multi && key === modelNames[0]);
+  for (const { key, color } of lines) {
+    const getValue = multi ? (p => valueOf(p, key)) : (p => p[key]);
+    const line = smoothLine(points.map((p, i) => [x(i), y(getValue(p))]));
+    if (isFirst(key) && points.length) svgNode('path', { d: `${line}L622,215L42,215Z`, fill: 'url(#trend-fill)' }, svg);
+    const path = svgNode('path', { d: line, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, svg);
+    const total = points.reduce((n, p) => n + getValue(p), 0);
+    svgNode('title', {}, path, `${key}: ${total} requests in this period`);
   }
+  // Hourly buckets (24h) always span two calendar days, so each tick shows
+  // time + day; daily buckets (7d) only need the date.
+  const stepMs = points.length > 1 ? Date.parse(points[1].at) - Date.parse(points[0].at) : 0;
+  const hourly = stepMs > 0 && stepMs < 12 * 3600e3;
+  const tickStep = hourly ? Math.max(1, Math.ceil(points.length / 8)) : 1;
   points.forEach((p, i) => {
-    if (i % Math.ceil(points.length / 5) && i !== points.length - 1) return;
-    const date = new Date(p.at), multiDay = points.length > 0 && new Date(points[0].at).toDateString() !== new Date(points.at(-1).at).toDateString();
-    svgNode('text', { x: x(i), y: 245, 'text-anchor': i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle' }, svg,
-      multiDay ? date.toLocaleDateString([], { month: 'short', day: 'numeric' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    if (i % tickStep && i !== points.length - 1) return;
+    const date = inTz(Date.parse(p.at));
+    const text = hourly
+      ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...tzOpt })
+      : date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'numeric', ...tzOpt });
+    const label = svgNode('text', { x: x(i), y: 230, transform: `rotate(-30 ${fmt(x(i))},230)`, 'text-anchor': 'end' }, svg, text);
+    label.style.fontSize = '11px'; label.style.fill = '#6b675e';
   });
 }
 export function distributionChart(parent, models) {

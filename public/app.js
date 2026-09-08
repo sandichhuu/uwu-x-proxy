@@ -15,6 +15,18 @@ const descriptions = {
   install: 'Connect your favorite tools to your unified proxy.'
 };
 let currentPage = 'analytics', generation = 0, range = '24h';
+// Chart timezone: minutes east of UTC, or null for browser-local time. Persisted in localStorage.
+let tzOffsetMin = null;
+try {
+  const savedTz = localStorage.getItem('analytics.tz');
+  if (savedTz !== null && savedTz !== 'local') { const n = Number(savedTz); if (Number.isFinite(n)) tzOffsetMin = n; }
+} catch {}
+const TZ_OFFSETS = [-720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210, -180, -120, -60, 0, 60, 120, 180, 210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 825, 840];
+function tzLabel(min) {
+  if (min === 0) return 'UTC';
+  const sign = min < 0 ? '-' : '+', a = Math.abs(min);
+  return `UTC${sign}${Math.floor(a / 60)}` + (a % 60 ? `:${String(a % 60).padStart(2, '0')}` : '');
+}
 async function api(path, options = {}) {
   const response = await fetch('/admin/api/' + path, { ...options, headers: { 'content-type': 'application/json' } });
   if (response.status === 204 || response.status === 205) {
@@ -120,20 +132,40 @@ function dashboard(root, data) {
   }
   const charts = el('div', undefined, root, 'chart-grid'), trend = el('section', undefined, charts, 'card');
   const header = el('div', undefined, trend, 'card-header'); el('h2', 'Usage trend', header);
-  const select = el('select', undefined, header); select.setAttribute('aria-label', 'Chart time range');
+  const controls = el('div', undefined, header);
+  controls.style.display = 'flex'; controls.style.gap = '8px'; controls.style.alignItems = 'center';
+  const select = el('select', undefined, controls); select.setAttribute('aria-label', 'Chart time range');
   for (const [value, label] of [['24h', '24 hourly buckets'], ['7d', '7 days (UTC)']]) { const option = el('option', label, select); option.value = value; }
   select.value = range; select.onchange = () => { range = select.value; page('analytics'); };
-  el('p', 'Request volume  -  current bucket included  -  labels in local time', trend, 'muted');
-  trendChart(trend, data.series);
-  const keys = el('div', undefined, trend, 'tabs'); legend(keys, 'Requests', COLORS[0]); legend(keys, 'Errors', COLORS[1]);
+  const tzSelect = el('select', undefined, controls); tzSelect.setAttribute('aria-label', 'Chart timezone');
+  const localOpt = el('option', `Local (${tzLabel(-new Date().getTimezoneOffset())})`, tzSelect); localOpt.value = 'local';
+  for (const min of TZ_OFFSETS) { const option = el('option', tzLabel(min), tzSelect); option.value = String(min); }
+  tzSelect.value = tzOffsetMin == null ? 'local' : String(tzOffsetMin);
+  tzSelect.onchange = () => {
+    tzOffsetMin = tzSelect.value === 'local' ? null : Number(tzSelect.value);
+    try { localStorage.setItem('analytics.tz', tzSelect.value); } catch {}
+    page('analytics');
+  };
+  el('p', `Request volume  -  current bucket included  -  labels in ${tzOffsetMin == null ? 'local time' : tzLabel(tzOffsetMin)}`, trend, 'muted');
+  // Only show top 5 models; group the rest as Others (defensive: API already does this).
+  const topDistribution = data.distribution.length > 5
+    ? [...data.distribution.slice(0, 5), { model: 'Others', requests: data.distribution.slice(5).reduce((n, m) => n + m.requests, 0) }]
+    : data.distribution;
+  // Trend lines follow the same top 5 + Others order so colors match the donut.
+  const trendModels = data.trendModels?.length ? data.trendModels : topDistribution.map(m => m.model);
+  trendChart(trend, data.series, trendModels, tzOffsetMin);
+  // No legend under the trend: line colors match the Model distribution legend on the right.
   if (!data.distribution.length) el('p', 'No requests in this period. Send a request to start your chart.', trend, 'muted');
   const distribution = card(charts, 'Model distribution', 'Request share  -  selected period');
-  distributionChart(distribution, data.distribution);
+  distributionChart(distribution, topDistribution);
   const labels = el('div', undefined, distribution, 'legend');
-  data.distribution.forEach((m, i) => legend(labels, m.model, COLORS[i % COLORS.length], number(m.requests)));
+  topDistribution.forEach((m, i) => legend(labels, m.model, COLORS[i % COLORS.length], number(m.requests)));
   if (!data.distribution.length) el('p', 'No model activity in this period.', distribution, 'muted');
   const details = el('details', undefined, trend); el('summary', 'View chart data', details);
-  table(details, [['Bucket', p => new Date(p.at).toLocaleString()], ['Requests', p => p.requests], ['Errors', p => p.errors]], data.series);
+  const fmtBucket = p => new Date(Date.parse(p.at) + (tzOffsetMin || 0) * 60000)
+    .toLocaleString([], tzOffsetMin == null ? {} : { timeZone: 'UTC' });
+  table(details, [['Bucket', fmtBucket], ['Requests', p => p.requests], ['Errors', p => p.errors],
+    ...trendModels.map(name => [name, p => p.models?.[name] || 0])], data.series);
   requests(card(root, 'Recent requests', 'Latest 10 requests across all models'), data.recent.slice(0, 10));
 }
 function accounts(root) {
