@@ -395,7 +395,22 @@ export function adminRouter(store) {
       res.json({ ok: true, count: defaultRoutes.length + endpointCount, routes: store.list('routes') });
    } catch (e) { next(e); }
  });
- r.patch('/routes/:id', (req,res) => { const old = store.list('routes').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); res.json(store.upsert('routes', { ...old, ...req.body, id: old.id })); });
+  r.patch('/routes/:id', (req,res) => {
+    const old = store.list('routes').find(x => x.id === req.params.id);
+    if (!old) return res.sendStatus(404);
+    // upsert() merges keys: switching a route to forward mode must drop the
+    // stale `variants` map from the stored object (explicit null also clears).
+    const clearVariants = req.body.variants === null || (req.body.effort && req.body.effort.mode !== 'variant');
+    const body = { ...req.body, id: old.id };
+    if (body.variants === null) delete body.variants;
+    store.upsert('routes', { ...old, ...body });
+    const stored = store.list('routes').find(x => x.id === old.id);
+    if (clearVariants && stored && stored.variants !== undefined) {
+      delete stored.variants;
+      try { store.save?.(); } catch { /* in-memory test store has no save */ }
+    }
+    res.json(stored);
+  });
  r.delete('/routes/:id', (req,res) => res.sendStatus(store.remove('routes', req.params.id) ? 204 : 404));
  r.patch('/models/:id', (req,res) => { const old = store.list('models').find(x => x.id === req.params.id); if (!old) return res.sendStatus(404); res.json(store.upsert('models', { ...old, ...req.body, id: old.id })); });
  r.delete('/models/:id', (req,res) => res.sendStatus(store.remove('models', req.params.id) ? 204 : 404));

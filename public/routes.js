@@ -30,7 +30,8 @@ export function routesPanel(parent, { api, el, error }) {
   formWrap.style.display = 'none';
 
   const form = el('form', undefined, formWrap, 'connection-form');
-  el('h3', 'Add New API Route', form);
+  const formTitle = el('h3', 'Add New API Route', form);
+  let editingRouteId = null;
 
   function field(label, type, placeholder, required = false) {
     const wrap = el('label', label, form), input = el('input', undefined, wrap);
@@ -41,35 +42,77 @@ export function routesPanel(parent, { api, el, error }) {
 
   const wrapMode = el('label', 'Routing Mode', form);
   const modeSelect = el('select', undefined, wrapMode);
-  const optMap = el('option', 'Map Model + Effort (Strip reasoning effort)', modeSelect);
-  optMap.value = 'variant';
   const optFwd = el('option', 'Forward (Map model name; preserve reasoning effort)', modeSelect);
   optFwd.value = 'forward';
+  const optMap = el('option', 'Map Model + Effort (Strip reasoning effort)', modeSelect);
+  optMap.value = 'variant';
+  modeSelect.value = 'forward';
 
   const wrapProv = el('label', 'Target Provider / Source', form);
   const provSelect = el('select', undefined, wrapProv);
 
   const upstreamInput = field('Base Upstream Model ID', 'text', 'e.g. gemini-3.8-flash-medium', true);
 
+  const wrapStrat = el('label', 'Routing Strategy', form);
+  const stratFormSelect = el('select', undefined, wrapStrat);
+  stratFormSelect.title = 'Round Robin cycles accounts/endpoints in order. Highest quota always picks the account/endpoint with the most remaining quota.';
+  const optRRForm = el('option', 'Round Robin', stratFormSelect);
+  optRRForm.value = 'round-robin';
+  const optHighForm = el('option', 'Highest quota', stratFormSelect);
+  optHighForm.value = 'smart';
+
   const formActions = el('div', undefined, form, 'tabs');
   formActions.style.marginBottom = '0';
-  const saveBtn = el('button', 'Save route', formActions, 'primary');
+  formActions.style.marginTop = '6px';
+  // The form is a 2-column grid: span both columns so flex-end lands
+  // the Save/Update + Cancel buttons at the form's bottom-right.
+  formActions.style.gridColumn = '1/-1';
+  formActions.style.justifyContent = 'flex-end';
+  const saveBtn = el('button', 'Save route', formActions, 'primary md');
   saveBtn.type = 'submit';
-  const cancelBtn = el('button', 'Cancel', formActions);
+  const cancelBtn = el('button', 'Cancel', formActions, 'secondary md');
   cancelBtn.type = 'button';
 
   cancelBtn.onclick = () => {
     formWrap.style.display = 'none';
+    editingRouteId = null;
   };
 
+  function openAddForm() {
+    editingRouteId = null;
+    formTitle.textContent = 'Add New API Route';
+    saveBtn.textContent = 'Save route';
+    nameInput.disabled = false;
+    wrapProv.style.display = '';
+    nameInput.value = '';
+    upstreamInput.value = '';
+    modeSelect.value = 'forward';
+    stratFormSelect.value = 'round-robin';
+    formWrap.style.display = 'block';
+    nameInput.focus();
+  }
+
+  function openEditForm(r) {
+    editingRouteId = r.id;
+    formTitle.textContent = 'Edit API Route - ' + r.id;
+    saveBtn.textContent = 'Update route';
+    // Route id and target source are immutable; edit upstream, mode, strategy.
+    nameInput.value = r.id;
+    nameInput.disabled = true;
+    wrapProv.style.display = 'none';
+    upstreamInput.value = r.upstreamId || '';
+    modeSelect.value = r.effort?.mode === 'variant' ? 'variant' : 'forward';
+    stratFormSelect.value = r.strategy === 'smart' ? 'smart' : 'round-robin';
+    formWrap.style.display = 'block';
+    upstreamInput.focus();
+  }
+
   addRouteBtn.onclick = () => {
-    formWrap.style.display = formWrap.style.display === 'none' ? 'block' : 'none';
-    if (formWrap.style.display === 'block') {
-      nameInput.value = '';
-      upstreamInput.value = '';
-      modeSelect.value = 'variant';
-      nameInput.focus();
+    if (formWrap.style.display === 'block' && editingRouteId === null) {
+      formWrap.style.display = 'none';
+      return;
     }
+    openAddForm();
   };
 
   const listContainer = el('div', undefined, parent);
@@ -126,6 +169,7 @@ export function routesPanel(parent, { api, el, error }) {
     el('th', 'Status', trHead);
     el('th', 'Public Model ID', trHead);
     el('th', 'Mode', trHead);
+    el('th', 'Strategy', trHead);
     el('th', 'Target Provider / Upstream', trHead);
     el('th', 'Actions', trHead);
 
@@ -186,17 +230,55 @@ export function routesPanel(parent, { api, el, error }) {
         el('span', 'Forwards (As-Is)', tdMode, 'pill muted-pill');
       }
 
+      // Strategy (Round Robin / Highest quota)
+      const tdStrategy = el('td', undefined, tr);
+      const stratSelect = el('select', undefined, tdStrategy, 'sm-select');
+      stratSelect.title = 'Round Robin cycles accounts/endpoints in order. Highest quota always picks the account/endpoint with the most remaining quota.';
+      stratSelect.setAttribute('aria-label', 'Routing strategy for route ' + r.id);
+      const optRR = el('option', 'Round Robin', stratSelect);
+      optRR.value = 'round-robin';
+      const optHigh = el('option', 'Highest quota', stratSelect);
+      optHigh.value = 'smart';
+      stratSelect.value = r.strategy === 'smart' ? 'smart' : 'round-robin';
+      stratSelect.onclick = (e) => e.stopPropagation();
+      stratSelect.onchange = async () => {
+        stratSelect.disabled = true;
+        try {
+          await api('routes/' + encodeURIComponent(r.id), {
+            method: 'PATCH',
+            body: JSON.stringify({ strategy: stratSelect.value })
+          });
+          r.strategy = stratSelect.value;
+          setFeedback('Strategy for "' + r.id + '" set to "' + stratSelect.selectedOptions[0].text + '".');
+        } catch (e) {
+          stratSelect.value = r.strategy === 'smart' ? 'smart' : 'round-robin';
+          setFeedback(e, true);
+        } finally {
+          stratSelect.disabled = false;
+        }
+      };
+
       // Target Provider / Upstream
       const tdTarget = el('td', undefined, tr);
       const provName = r.provider ? (r.provider.startsWith('google') ? 'Google' : 'OpenAI') : (r.endpointId ? 'API Endpoint' : 'Custom');
       el('span', provName + ': ' + r.upstreamId, tdTarget);
 
-      // Actions: Delete only (row click handles selection)
+      // Actions: Edit + Delete (row click handles selection)
       const tdActions = el('td', undefined, tr);
       const btnGroup = el('div', undefined, tdActions);
       btnGroup.style.display = 'flex';
       btnGroup.style.gap = '6px';
       btnGroup.style.alignItems = 'center';
+
+      const editBtn = el('button', 'Edit', btnGroup, 'secondary sm');
+      editBtn.title = 'Edit route ' + r.id;
+      editBtn.onclick = (e) => {
+        e.stopPropagation();
+        selectedRoute = r;
+        renderRoutesList();
+        renderMappingPanel();
+        openEditForm(r);
+      };
 
       const deleteBtn = el('button', 'Delete', btnGroup, 'sm danger');
       deleteBtn.title = 'Delete route ' + r.id;
@@ -482,26 +564,42 @@ export function routesPanel(parent, { api, el, error }) {
         };
       }
 
-      await api('routes', {
-        method: 'POST',
-        body: JSON.stringify({
-          id: publicId,
-          name: publicId,
-          provider,
-          endpointId,
-          upstreamId: baseUpstream,
-          effort: effortConfig,
-          variants,
-          enabled: true
-        })
-      });
+      if (editingRouteId) {
+        await api('routes/' + encodeURIComponent(editingRouteId), {
+          method: 'PATCH',
+          body: JSON.stringify({
+            upstreamId: baseUpstream,
+            effort: effortConfig,
+            variants,
+            strategy: stratFormSelect.value
+          })
+        });
+      } else {
+        await api('routes', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: publicId,
+            name: publicId,
+            provider,
+            endpointId,
+            upstreamId: baseUpstream,
+            effort: effortConfig,
+            variants,
+            strategy: stratFormSelect.value,
+            enabled: true
+          })
+        });
+      }
 
+      const savedId = editingRouteId || publicId;
+      const wasEdit = !!editingRouteId;
+      editingRouteId = null;
       formWrap.style.display = 'none';
       await loadRoutes();
-      selectedRoute = routes.find(r => r.id === publicId) || selectedRoute;
+      selectedRoute = routes.find(r => r.id === savedId) || selectedRoute;
       renderRoutesList();
       renderMappingPanel();
-      setFeedback('Route "' + publicId + '" created successfully.');
+      setFeedback(wasEdit ? 'Route "' + savedId + '" updated successfully.' : 'Route "' + savedId + '" created successfully.');
     } catch (e) {
       setFeedback(e, true);
     } finally {

@@ -13,6 +13,7 @@
 button.danger{color:#ab422c;border-color:#ecc6b7;background:#fdf5f2;padding:4px 9px;font-size:12px;border-radius:6px;line-height:1.3}
 button.danger:hover:not(:disabled){background:#fbe5dc;border-color:#ab422c}
 button.sm{padding:4px 9px;font-size:12px;border-radius:6px;line-height:1.3}
+button.md{padding:5px 12px;font-size:13px;border-radius:6px;line-height:1.35}
 .pill.good{background:#edf1e7;color:#45634c}
 .pill.warning{background:#fdf2dc;color:#8a6417}
 .pill.muted-pill{background:#eee9dc;color:var(--muted)}

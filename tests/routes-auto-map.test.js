@@ -142,6 +142,55 @@ test('routes UI falls back to low as the default effort', () => {
   assert.match(routesJs, /default: 'low'/);
 });
 
+test('routes UI lets users pick Round Robin or Highest quota strategy', () => {
+  const routesJs = fs.readFileSync(new URL('../public/routes.js', import.meta.url), 'utf8');
+  assert.match(routesJs, /Highest quota/);
+  assert.match(routesJs, /strategy: stratSelect\.value/);
+  assert.match(routesJs, /strategy: stratFormSelect\.value/);
+});
+
+test('routes UI defaults Routing Mode to Forward and offers Edit', () => {
+  const routesJs = fs.readFileSync(new URL('../public/routes.js', import.meta.url), 'utf8');
+  // Forward option is declared before the variant option and is the default.
+  assert.ok(routesJs.indexOf("optFwd = el('option', 'Forward") < routesJs.indexOf("optMap = el('option', 'Map Model"));
+  assert.match(routesJs, /modeSelect\.value = 'forward'/);
+  assert.match(routesJs, /openEditForm/);
+  assert.match(routesJs, /'Edit API Route - '/);
+  assert.match(routesJs, /method: 'PATCH'/);
+});
+
+test('PATCH route to forward mode drops the stale variants map', async t => {
+  const store = memory();
+  store.data.endpoints.push({ id: 'ep', name: 'E', protocol: 'openai', baseUrl: 'http://e.local/v1', enabled: true });
+  const base = await listen(t, createApp(store));
+  const api = (route, body, method = 'POST') => fetch(`${base}${route}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  const created = await (await api('/admin/api/routes', {
+    id: 'google/gemini-3.8-flash', provider: 'google', upstreamId: 'gemini-3.8-flash-medium',
+    effort: { mode: 'variant', default: 'medium', supported: ['low'], variants: { low: 'gemini-3.8-flash-low' } },
+    variants: { low: 'gemini-3.8-flash-low' }
+  })).json();
+  assert.deepEqual(created.variants, { low: 'gemini-3.8-flash-low' });
+
+  const patched = await (await api('/admin/api/routes/google%2Fgemini-3.8-flash', {
+    upstreamId: 'gemini-3.8-flash-medium',
+    effort: { mode: 'forward', supported: [] },
+    strategy: 'smart'
+  }, 'PATCH')).json();
+  assert.equal(patched.effort.mode, 'forward');
+  assert.equal(patched.strategy, 'smart');
+  assert.ok(!('variants' in patched), 'stale variants must be cleared, got ' + JSON.stringify(patched));
+  assert.ok(!('variants' in store.list('routes').find(r => r.id === 'google/gemini-3.8-flash')));
+  // Strategy-only PATCH on a variant route must keep its variants.
+  await api('/admin/api/routes', {
+    id: 'google/gemini-3.7-flash', provider: 'google', upstreamId: 'gemini-3.7-flash-medium',
+    effort: { mode: 'variant', default: 'low', supported: ['low'], variants: { low: 'gemini-3.7-flash-low' } },
+    variants: { low: 'gemini-3.7-flash-low' }
+  });
+  const stratOnly = await (await api('/admin/api/routes/google%2Fgemini-3.7-flash', { strategy: 'smart' }, 'PATCH')).json();
+  assert.deepEqual(stratOnly.variants, { low: 'gemini-3.7-flash-low' });
+});
+
 test('endpoints table selects records by row click', () => {
   const endpointsJs = fs.readFileSync(new URL('../public/endpoints.js', import.meta.url), 'utf8');
   assert.match(endpointsJs, /tr\.onclick/);
