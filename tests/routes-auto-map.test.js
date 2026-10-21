@@ -52,11 +52,17 @@ test('auto-map adds endpoint models as forward routes without touching other reg
   const first = await post('/admin/api/routes/auto-map');
   assert.equal(first.status, 200);
   const data = await first.json();
-  assert.equal(data.count, 9 + 1);
+  // One provider route (google/my-account-model) + one endpoint route.
+  assert.equal(data.count, 1 + 1);
   const epRoute = store.list('routes').find(r => r.id === 'ollama/llama3.2:latest');
   assert.ok(epRoute);
   assert.deepEqual(epRoute.effort, { mode: 'forward', supported: [] });
   assert.deepEqual(epRoute.sources, [{ type: 'endpoint', endpointId: 'ep_ollama', upstreamId: 'llama3.2:latest' }]);
+  // Account cards are mirrored into provider-prefixed routes derived from the
+  // fetched card, never the raw card id.
+  const accountRoute = store.list('routes').find(r => r.id === 'google/my-account-model');
+  assert.ok(accountRoute);
+  assert.equal(accountRoute.upstreamId, 'gemini-3.8-flash-medium');
   assert.ok(!store.list('routes').some(r => r.id === 'my-account-model'));
   assert.ok(!store.list('routes').some(r => r.id === 'llama3.2:latest'));
   assert.deepEqual(store.data.models, modelsBefore);

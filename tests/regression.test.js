@@ -505,30 +505,45 @@ test('PATCH /admin/api/models/:id updates execution strategy and enable/disable 
   assert.equal(modelsRes2.data.some(m => m.id === 'my-model'), true);
 });
 
-test('OpenAI Codex discoverOpenAI retains only gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6-astra', async () => {
+test('OpenAI Codex discoverOpenAI returns exactly what upstream exposes (no hardcoded allowlist)', async t => {
   const store = memory();
-  const acc = { id: 'acc_oai', provider: 'openai', accountId: 'acc_123', accessToken: 'mock_token' };
+  const acc = { id: 'acc_oai', provider: 'openai', accountId: 'acc_123', accessToken: 'mock_token', expiresAt: Date.now() + 3600_000 };
   store.data.accounts.push(acc);
-  const { discoverOpenAI, ALLOWED_OPENAI_MODEL_IDS } = await import('../src/providers/openai-codex.js');
+  const { discoverOpenAI } = await import('../src/providers/openai-codex.js');
+
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      models: [
+        { slug: 'gpt-5.7-nova', display_name: 'GPT-5.7 Nova', supported_in_api: true, default_reasoning_level: 'high', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
+        { slug: 'codex-auto-review', display_name: 'Codex Auto Review', supported_in_api: true, default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium' }] },
+        { slug: 'hidden-model', supported_in_api: false }
+      ]
+    })
+  });
 
   const models = await discoverOpenAI(store, acc);
-  assert.equal(models.length, 4, `Expected exactly 4 models, got ${models.length}`);
-  const modelIds = models.map(m => m.id).sort();
-  assert.deepEqual(modelIds, ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra'].sort());
+  assert.deepEqual(models.map(m => m.id).sort(), ['codex-auto-review', 'gpt-5.7-nova']);
+  const nova = models.find(m => m.id === 'gpt-5.7-nova');
+  assert.equal(nova.name, 'GPT-5.7 Nova');
+  assert.equal(nova.upstreamId, 'gpt-5.7-nova');
+  assert.deepEqual(nova.supported, ['low', 'high']);
+  assert.equal(nova.default, 'high');
+});
 
-  const astra = models.find(m => m.id === 'gpt-6-astra');
-  assert.ok(astra, 'gpt-6-astra must be present');
-  assert.deepEqual(astra.supported, ['light', 'medium', 'high', 'extra_high', 'ultra']);
-  assert.equal(astra.default, 'medium');
+test('OpenAI Codex discoverOpenAI returns an empty list when upstream fails (no fabricated models)', async t => {
+  const store = memory();
+  const acc = { id: 'acc_oai2', provider: 'openai', accountId: 'acc_123', accessToken: 'mock_token', expiresAt: Date.now() + 3600_000 };
+  store.data.accounts.push(acc);
+  const { discoverOpenAI } = await import('../src/providers/openai-codex.js');
 
-  const sol = models.find(m => m.id === 'gpt-5.6-sol');
-  assert.ok(sol, 'gpt-5.6-sol must be present');
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({}) });
 
-  const terra = models.find(m => m.id === 'gpt-5.6-terra');
-  assert.ok(terra, 'gpt-5.6-terra must be present');
-
-  const luna = models.find(m => m.id === 'gpt-5.6-luna');
-  assert.ok(luna, 'gpt-5.6-luna must be present');
+  assert.deepEqual(await discoverOpenAI(store, acc), []);
 });
 
 test('Google Antigravity discoverGoogle exposes only gemini-3.6-flash-*, gemini-3.7-flash-*, gemini-3.8-flash-*, claude-*', async () => {
@@ -545,12 +560,12 @@ test('Google Antigravity discoverGoogle exposes only gemini-3.6-flash-*, gemini-
     assert.ok(isAllowedGoogleModel(m.id), `Model ${m.id} should match allowed pattern`);
   }
 
-  // `claude-sonnet-4-6-thinking` does not exist upstream (HTTP 404
-  // `Requested entity was not found`) and must never be exposed.
+  // No model is synthesized: a fabricated id such as
+  // `claude-sonnet-4-6-thinking` (HTTP 404 upstream) must never be exposed.
   assert.ok(!models.some(m => m.id === 'claude-sonnet-4-6-thinking'), 'claude-sonnet-4-6-thinking must NOT be exposed');
-  const thinkingOpus = models.find(m => m.id === 'claude-opus-4-6-thinking');
-  assert.ok(thinkingOpus, 'claude-opus-4-6-thinking must be exposed');
-  assert.equal(thinkingOpus.upstreamId, 'claude-opus-4-6-thinking');
+  const opus = models.find(m => m.id === 'claude-opus-5-5-high');
+  assert.ok(opus, 'claude-opus-5-5-high must be exposed');
+  assert.equal(opus.upstreamId, 'claude-opus-5-5-high');
 
   const flash38 = models.find(m => m.id === 'gemini-3.8-flash-high');
   assert.ok(flash38, 'gemini-3.8-flash-high must be present');
@@ -783,6 +798,13 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   store.data.models.push(
     { id: 'gemini-3.8-flash-low', provider: 'google', upstreamId: 'gemini-3.8-flash-medium-low', enabled: true },
     { id: 'gemini-3.8-flash-medium', provider: 'google', upstreamId: 'gemini-3.8-flash-medium', enabled: true },
+    { id: 'gemini-3.8-flash-high', provider: 'google', upstreamId: 'gemini-3.8-flash-high', enabled: true },
+    { id: 'gemini-3.8-flash-tiered', provider: 'google', upstreamId: 'gemini-3.8-flash-tiered', enabled: true },
+    { id: 'claude-sonnet-5-5-low', provider: 'google', upstreamId: 'claude-sonnet-5-5-low', enabled: true },
+    { id: 'claude-sonnet-5-5-medium', provider: 'google', upstreamId: 'claude-sonnet-5-5-medium', enabled: true },
+    { id: 'claude-sonnet-5-5-high', provider: 'google', upstreamId: 'claude-sonnet-5-5-high', enabled: true },
+    { id: 'gpt-5.6-sol', provider: 'openai', upstreamId: 'gpt-5.6-sol', enabled: true },
+    { id: 'gpt-6-astra', provider: 'openai', upstreamId: 'gpt-6-astra', enabled: true },
     { id: 'unrelated-account-card', provider: 'google', upstreamId: 'do-not-touch', enabled: false }
   );
   const modelsBeforeAutoMap = structuredClone(store.data.models);
@@ -795,34 +817,43 @@ test('API Routes navigation, Auto Map, variant effort mapping, and forward mode 
   assert.equal(autoMapRes.status, 200);
   const autoMapData = await autoMapRes.json();
   assert.equal(autoMapData.ok, true);
-  assert.ok(autoMapData.count >= 8);
+  // 2 provider routes (gemini-3.8-flash, claude-sonnet-5-5) + 2 openai forwards.
+  assert.equal(autoMapData.count, 4);
   assert.deepEqual(store.data.models, modelsBeforeAutoMap, 'Auto Map must not mutate Models/Accounts cards');
   assert.deepEqual(store.data.accounts, accountsBeforeAutoMap, 'Auto Map must not mutate Accounts');
   assert.deepEqual(store.data.endpoints, endpointsBeforeAutoMap, 'Auto Map must not mutate API Endpoints');
   assert.equal((await (await fetch(`${base}/admin/api/models`)).json()).length, modelsBeforeAutoMap.length);
   assert.equal((await (await fetch(`${base}/admin/api/routes`)).json()).length, autoMapData.count);
 
-  // 3. Verify google/gemini-3.8-flash default mapping:
-  // 4 models: gemini-3.8-flash-tiered, gemini-3.8-flash-low, gemini-3.8-flash-medium, gemini-3.8-flash-high
-  // -> maps to 1 model google/gemini-3.8-flash with efforts: low, medium, high, xhigh
+  // 3. Verify google/gemini-3.8-flash mapping: the four fetched effort cards
+  // (low/medium/high/tiered) collapse into one route with low/medium/high/xhigh.
   const flash38 = store.data.routes.find(m => m.id === 'google/gemini-3.8-flash');
   assert.ok(flash38);
   assert.equal(flash38.effort.mode, 'variant');
   assert.deepEqual(flash38.effort.supported, ['low', 'medium', 'high', 'xhigh']);
   assert.equal(flash38.effort.default, 'medium');
-  assert.equal(flash38.effort.variants.low, 'gemini-3.8-flash-low');
+  assert.equal(flash38.effort.variants.low, 'gemini-3.8-flash-medium-low');
   assert.equal(flash38.effort.variants.medium, 'gemini-3.8-flash-medium');
   assert.equal(flash38.effort.variants.high, 'gemini-3.8-flash-high');
   assert.equal(flash38.effort.variants.xhigh, 'gemini-3.8-flash-tiered');
 
+  // The renamed Claude family groups automatically too (no hardcoded route).
+  const claude = store.data.routes.find(m => m.id === 'google/claude-sonnet-5-5');
+  assert.ok(claude);
+  assert.equal(claude.effort.mode, 'variant');
+  assert.deepEqual(claude.effort.supported, ['low', 'medium', 'high']);
+  assert.equal(claude.effort.default, 'medium');
+  assert.equal(claude.effort.variants.high, 'claude-sonnet-5-5-high');
+
   // 4. Test resolveModel routing for variant mode:
   // Requests with different effort levels route to the specific model variant
-  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'low').upstreamId, 'gemini-3.8-flash-low');
+  assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'low').upstreamId, 'gemini-3.8-flash-medium-low');
   assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'medium').upstreamId, 'gemini-3.8-flash-medium');
   assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'high').upstreamId, 'gemini-3.8-flash-high');
   assert.equal(resolveModel(store, 'google/gemini-3.8-flash', 'xhigh').upstreamId, 'gemini-3.8-flash-tiered');
   // Request without effort defaults to medium -> gemini-3.8-flash-medium
   assert.equal(resolveModel(store, 'google/gemini-3.8-flash').upstreamId, 'gemini-3.8-flash-medium');
+  assert.equal(resolveModel(store, 'google/claude-sonnet-5-5', 'high').upstreamId, 'claude-sonnet-5-5-high');
 
   // 5. Test forward mode:
   // Forward mode forwards effort to the upstream provider unchanged

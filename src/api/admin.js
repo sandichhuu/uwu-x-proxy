@@ -96,182 +96,64 @@ export function adminRouter(store) {
  });
  r.post('/routes/auto-map', (req, res, next) => {
    try {
-     // Routes are a separate registry. Auto Map must never mutate account/endpoint model cards.
+      // Routes are a separate registry. Auto Map must never mutate
+      // account/endpoint model cards. Provider routes are derived from the
+      // fetched model cards so a renamed upstream model (e.g. Claude 5.5,
+      // Gemini 3.8) maps automatically with no hardcoded list to go stale.
+      // Effort variants (-low/-medium/-high/-tiered) collapse into one route.
+      const EFFORT_SUFFIX = { low: 'low', medium: 'medium', high: 'high', tiered: 'xhigh' };
+      const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh'];
+      const providerPrefix = p => (p?.startsWith('google') ? 'google' : p?.startsWith('openai') ? 'openai' : null);
+      const isAccountCard = m => m.provider
+        && !m.endpointId && !(m.endpointIds?.length)
+        && !(m.sources || []).some(s => s.type === 'endpoint' || s.endpointId);
 
-
-      const defaultRoutes = [
-        {
-          id: 'google/gemini-3.8-flash',
-          name: 'Gemini 3.8 Flash',
-          provider: 'google',
-          upstreamId: 'gemini-3.8-flash-medium',
-         effort: {
-           mode: 'variant',
-           default: 'medium',
-           supported: ['low', 'medium', 'high', 'xhigh'],
-           variants: {
-             low: 'gemini-3.8-flash-low',
-             medium: 'gemini-3.8-flash-medium',
-             high: 'gemini-3.8-flash-high',
-             xhigh: 'gemini-3.8-flash-tiered'
-           }
-         },
-         variants: {
-           low: 'gemini-3.8-flash-low',
-           medium: 'gemini-3.8-flash-medium',
-           high: 'gemini-3.8-flash-high',
-           xhigh: 'gemini-3.8-flash-tiered'
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'google/gemini-3.7-flash',
-          name: 'Gemini 3.7 Flash',
-          provider: 'google',
-          upstreamId: 'gemini-3.7-flash-medium',
-         effort: {
-           mode: 'variant',
-           default: 'medium',
-           supported: ['low', 'medium', 'high', 'xhigh'],
-           variants: {
-             low: 'gemini-3.7-flash-low',
-             medium: 'gemini-3.7-flash-medium',
-             high: 'gemini-3.7-flash-high',
-             xhigh: 'gemini-3.7-flash-tiered'
-           }
-         },
-         variants: {
-           low: 'gemini-3.7-flash-low',
-           medium: 'gemini-3.7-flash-medium',
-           high: 'gemini-3.7-flash-high',
-           xhigh: 'gemini-3.7-flash-tiered'
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'google/gemini-3.6-flash',
-          name: 'Gemini 3.6 Flash',
-          provider: 'google',
-          upstreamId: 'gemini-3.6-flash-medium',
-         effort: {
-           mode: 'variant',
-           default: 'medium',
-           supported: ['low', 'medium', 'high', 'xhigh'],
-           variants: {
-             low: 'gemini-3.6-flash-low',
-             medium: 'gemini-3.6-flash-medium',
-             high: 'gemini-3.6-flash-high',
-             xhigh: 'gemini-3.6-flash-tiered'
-           }
-         },
-         variants: {
-           low: 'gemini-3.6-flash-low',
-           medium: 'gemini-3.6-flash-medium',
-           high: 'gemini-3.6-flash-high',
-           xhigh: 'gemini-3.6-flash-tiered'
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'google/claude-sonnet-4-6',
-          name: 'Claude Sonnet 4.6',
-          provider: 'google',
-          upstreamId: 'claude-sonnet-4-6',
-          effort: {
-            mode: 'forward',
-            supported: []
-          },
-          enabled: true,
-          strategy: 'round-robin'
-        },
-        {
-          id: 'google/claude-opus-4-6-thinking',
-          name: 'Claude Opus 4.6 Thinking',
-          provider: 'google',
-          upstreamId: 'claude-opus-4-6-thinking',
-          effort: {
-            mode: 'forward',
-            supported: []
-          },
-          enabled: true,
-          strategy: 'round-robin'
-        },
-        {
-          id: 'openai/gpt-5.6-sol',
-          name: 'GPT-5.6 Sol',
-          provider: 'openai',
-          upstreamId: 'gpt-5.6-sol',
-         effort: {
-           mode: 'forward',
-           supported: []
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'openai/gpt-5.6-terra',
-          name: 'GPT-5.6 Terra',
-          provider: 'openai',
-          upstreamId: 'gpt-5.6-terra',
-         effort: {
-           mode: 'forward',
-           supported: []
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'openai/gpt-5.6-luna',
-          name: 'GPT-5.6 Luna',
-          provider: 'openai',
-          upstreamId: 'gpt-5.6-luna',
-         effort: {
-           mode: 'forward',
-           supported: []
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       },
-        {
-          id: 'openai/gpt-6-astra',
-          name: 'GPT-6 Astra',
-          provider: 'openai',
-          upstreamId: 'gpt-6-astra',
-         effort: {
-           mode: 'forward',
-           supported: []
-         },
-         enabled: true,
-         strategy: 'round-robin'
-       }
-     ];
-
-      const legacyDefaultIds = {
-        'gemini-3.8-flash': 'google/gemini-3.8-flash',
-        'gemini-3.7-flash': 'google/gemini-3.7-flash',
-        'gemini-3.6-flash': 'google/gemini-3.6-flash',
-        'claude-sonnet-4-6': 'google/claude-sonnet-4-6',
-        'claude-opus-4-6-thinking': 'google/claude-opus-4-6-thinking',
-        'gpt-5.6-sol': 'openai/gpt-5.6-sol',
-        'gpt-5.6-terra': 'openai/gpt-5.6-terra',
-        'gpt-5.6-luna': 'openai/gpt-5.6-luna',
-        'gpt-6-astra': 'openai/gpt-6-astra'
-      };
-
-      for (const route of defaultRoutes) {
-        // Migrate legacy unprefixed route customizations (enabled/strategy) on upgrade.
-        const legacyId = Object.keys(legacyDefaultIds).find(k => legacyDefaultIds[k] === route.id);
-        const legacy = legacyId ? store.list('routes').find(r => r.id === legacyId) : null;
-        const existing = store.list('routes').find(r => r.id === route.id);
-        if (legacy && !existing) {
-          if (typeof legacy.enabled === 'boolean') route.enabled = legacy.enabled;
-          if (legacy.strategy) route.strategy = legacy.strategy;
+      const providerRoutes = [];
+      const groups = new Map();
+      for (const m of store.list('models')) {
+        if (m.enabled === false || !isAccountCard(m)) continue;
+        const provider = providerPrefix(m.provider);
+        if (!provider) continue;
+        const value = m.upstreamId || m.id;
+        const match = /-(low|medium|high|tiered)$/i.exec(m.id);
+        if (match) {
+          const effort = EFFORT_SUFFIX[match[1].toLowerCase()];
+          const base = m.id.slice(0, m.id.length - match[0].length);
+          const key = `${provider}/${base}`;
+          if (!groups.has(key)) groups.set(key, { id: key, provider, base, variants: {} });
+          groups.get(key).variants[effort] = value;
+        } else {
+          providerRoutes.push({
+            id: `${provider}/${m.id}`,
+            name: m.name || m.id,
+            provider,
+            upstreamId: value,
+            effort: { mode: 'forward', supported: [] },
+            enabled: true,
+            strategy: 'round-robin'
+          });
         }
+      }
+      for (const g of groups.values()) {
+        const supported = EFFORT_ORDER.filter(eff => g.variants[eff]);
+        if (!supported.length) continue;
+        const def = supported.includes('medium') ? 'medium' : supported[0];
+        providerRoutes.push({
+          id: g.id,
+          name: g.base,
+          provider: g.provider,
+          upstreamId: g.variants[def],
+          effort: { mode: 'variant', default: def, supported, variants: { ...g.variants } },
+          variants: { ...g.variants },
+          enabled: true,
+          strategy: 'round-robin'
+        });
+      }
+
+      for (const route of providerRoutes) {
         // Preserve user customizations (notably enabled=false) on re-run:
         // Auto Map must never re-enable a route the user disabled.
+        const existing = store.list('routes').find(r => r.id === route.id);
         if (existing) {
           if (typeof existing.enabled === 'boolean') route.enabled = existing.enabled;
           if (existing.strategy) route.strategy = existing.strategy;
@@ -286,21 +168,26 @@ export function adminRouter(store) {
             try { store.save?.(); } catch { /* in-memory test store has no save */ }
           }
         }
-        if (legacyId) store.remove('routes', legacyId);
+      }
+
+      // Drop provider routes whose upstream target is gone from the fetched
+      // cards (e.g. after the claude-sonnet-4-6 -> claude-sonnet-5-5 rename).
+      const liveUpstream = new Set(store.list('models').filter(m => m.enabled !== false).map(m => m.upstreamId || m.id));
+      for (const r of [...store.list('routes')]) {
+        if (!providerPrefix(r.provider)) continue;
+        const refs = [r.upstreamId, ...Object.values(r.effort?.variants || {}), ...Object.values(r.variants || {})].filter(Boolean);
+        if (!refs.some(u => liveUpstream.has(u))) store.remove('routes', r.id);
       }
 
       // Prune endpoint-backed routes whose endpoints are all disabled/missing.
-      // Models enabled nhưng endpoint (provider) đã disabled thì route cũ
-      // không được giữ lại khi Auto Map.
       const enabledEndpointIds = new Set(store.list('endpoints').filter(e => e.enabled !== false).map(e => e.id));
-      const defaultRouteIds = new Set(defaultRoutes.map(r => r.id));
       for (const r of [...store.list('routes')]) {
-        if (defaultRouteIds.has(r.id)) continue;
+        if (providerPrefix(r.provider)) continue;
         const refs = [
           ...(r.endpointIds || (r.endpointId ? [r.endpointId] : [])),
           ...((r.sources || []).filter(s => s.endpointId).map(s => s.endpointId))
         ];
-        if (!refs.length) continue; // provider/manual route, không phải endpoint
+        if (!refs.length) continue;
         if (!refs.some(id => enabledEndpointIds.has(id))) store.remove('routes', r.id);
       }
 
@@ -356,20 +243,9 @@ export function adminRouter(store) {
         });
         endpointCount++;
       }
-      // Final sweep: drop any leftover legacy default ids superseded by prefixed ones.
-      for (const [legacyId, newId] of Object.entries(legacyDefaultIds)) {
-        if (store.list('routes').some(r => r.id === newId)) store.remove('routes', legacyId);
-      }
-      // Prune known-phantom defaults: `claude-sonnet-4-6-thinking` never
-      // existed upstream (Google answers HTTP 404 `Requested entity was not
-      // found`), but older Auto Map runs created a route for it. Remove both
-      // the prefixed and the legacy unprefixed ids.
-      for (const phantomId of ['google/claude-sonnet-4-6-thinking', 'claude-sonnet-4-6-thinking']) {
-        store.remove('routes', phantomId);
-      }
       // Group routes by provider so the same provider stays adjacent:
       // google -> openai -> endpoint (per endpointId) -> custom. Stable sort
-      // keeps defaultRoutes order and user order inside each group.
+      // keeps generated order and user order inside each group.
       {
         const all = store.list('routes');
         const groupOf = r => {
@@ -392,7 +268,7 @@ export function adminRouter(store) {
           try { store.save?.(); } catch { /* in-memory test store has no save */ }
         }
       }
-      res.json({ ok: true, count: defaultRoutes.length + endpointCount, routes: store.list('routes') });
+      res.json({ ok: true, count: providerRoutes.length + endpointCount, routes: store.list('routes') });
    } catch (e) { next(e); }
  });
   r.patch('/routes/:id', (req,res) => {

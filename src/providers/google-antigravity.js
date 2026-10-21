@@ -52,9 +52,16 @@ export async function executeGoogle(store, account, innerRequest, upstreamId, si
 
 export const isAllowedGoogleModel = id => /^(?:gemini-3\.[678]-flash-.+|claude-.+)$/i.test(id);
 
+// Used only when upstream discovery fails entirely, so it must track the
+// current upstream names (Claude 5.5, Gemini 3.8/3.7/3.6). It is never the
+// source of truth: a successful fetch always wins.
 export const FALLBACK_GOOGLE_MODELS = [
-  'claude-opus-4-6-thinking',
-  'claude-sonnet-4-6',
+  'claude-opus-5-5-high',
+  'claude-opus-5-5-medium',
+  'claude-opus-5-5-low',
+  'claude-sonnet-5-5-high',
+  'claude-sonnet-5-5-medium',
+  'claude-sonnet-5-5-low',
   'gemini-3.8-flash-high',
   'gemini-3.8-flash-medium',
   'gemini-3.8-flash-low',
@@ -228,16 +235,10 @@ export async function discoverGoogle(store, account) {
     }
   }
 
-  // NOTE: `claude-sonnet-4-6-thinking` is intentionally NOT synthesized here.
-  // Upstream answers it with HTTP 404 `Requested entity was not found`, so it
-  // must never be exposed as a card/route. Only expose ids upstream returns
-  // (plus the offline fallback list above, which contains verified ids only).
-  // `claude-opus-4-6-thinking` below is kept because that id is confirmed live.
-  if (!models.some(m => m.id === 'claude-opus-4-6-thinking')
-    && models.some(m => m.id.startsWith('claude-'))) {
-    const quota = models.find(m => m.id.startsWith('claude-'))?.quota ?? null;
-    models.push({ id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)', upstreamId: 'claude-opus-4-6-thinking', quota });
-  }
+  // Only expose what upstream actually returns (plus the offline fallback
+  // list above). No model is synthesized here: a fabricated id such as
+  // `claude-sonnet-4-6-thinking` upstream answers with HTTP 404
+  // `Requested entity was not found`, and names change over time.
 
   const quotaMap = Object.fromEntries(models.map(x => [x.id, x.quota]));
   // Grouped weekly + 5h summary (the Antigravity display source). Best-effort
