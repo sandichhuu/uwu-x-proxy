@@ -6,7 +6,8 @@ import {
   geminiToAnthropic,
   geminiToOpenAI,
   unwrapGemini,
-  rememberThoughtSignature
+  rememberThoughtSignature,
+  sanitizeGeminiSchema
 } from '../src/providers/google-converter.js';
 
 test('anthropicToGemini maps system, turns and tools to Gemini parts', () => {
@@ -106,4 +107,63 @@ test('geminiToOpenAI maps finish reasons and usage, unwraps envelopes', () => {
   assert.equal(completion.choices[0].finish_reason, 'length');
   assert.deepEqual(completion.usage, { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 });
   assert.deepEqual(unwrapGemini({ a: 1 }), { a: 1 });
+});
+
+test('sanitizeGeminiSchema flattens nullable array types to singular type with nullable: true', () => {
+  assert.deepEqual(sanitizeGeminiSchema({ type: ['number', 'null'] }), { type: 'number', nullable: true });
+  assert.deepEqual(sanitizeGeminiSchema({ type: ['string', 'null'] }), { type: 'string', nullable: true });
+  assert.deepEqual(sanitizeGeminiSchema({ type: 'string', nullable: false }), { type: 'string', nullable: false });
+  assert.deepEqual(sanitizeGeminiSchema({ type: ['null'] }), { nullable: true });
+  assert.deepEqual(sanitizeGeminiSchema({
+    type: 'object',
+    properties: {
+      skip: { type: ['number', 'null'] },
+      items: { type: 'array', items: { type: ['string', 'null'] } }
+    }
+  }), {
+    type: 'object',
+    properties: {
+      skip: { type: 'number', nullable: true },
+      items: { type: 'array', items: { type: 'string', nullable: true } }
+    }
+  });
+});
+
+test('openAIToGemini and anthropicToGemini sanitize tool parameters with nullable array types', () => {
+  const openAIReq = openAIToGemini({
+    messages: [{ role: 'user', content: 'search' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'grep',
+        parameters: {
+          type: 'object',
+          properties: {
+            skip: { type: ['number', 'null'] }
+          }
+        }
+      }
+    }]
+  }, {});
+  assert.deepEqual(
+    openAIReq.tools[0].functionDeclarations[0].parameters.properties.skip,
+    { type: 'number', nullable: true }
+  );
+
+  const anthropicReq = anthropicToGemini({
+    messages: [{ role: 'user', content: 'search' }],
+    tools: [{
+      name: 'grep',
+      input_schema: {
+        type: 'object',
+        properties: {
+          skip: { type: ['number', 'null'] }
+        }
+      }
+    }]
+  }, {});
+  assert.deepEqual(
+    anthropicReq.tools[0].functionDeclarations[0].parameters.properties.skip,
+    { type: 'number', nullable: true }
+  );
 });

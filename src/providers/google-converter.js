@@ -55,6 +55,41 @@ function generationConfigFrom(body) {
   return config;
 }
 
+// Google Gemini's Schema proto requires `type` to be a single enum value
+// (STRING, NUMBER, INTEGER, BOOLEAN, ARRAY, OBJECT). JSON Schema / OpenAPI 3.1
+// nullable fields often represent types as arrays like `["number", "null"]`,
+// which upstream rejects with HTTP 400:
+// "Proto field is not repeating, cannot start list."
+export function sanitizeGeminiSchema(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeGeminiSchema);
+  const out = {};
+  let isNullable = false;
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === 'type') {
+      if (Array.isArray(v)) {
+        if (v.includes('null')) isNullable = true;
+        const nonNull = v.filter(t => t !== 'null');
+        if (nonNull.length > 0) out.type = nonNull[0];
+      } else if (v === 'null') {
+        isNullable = true;
+      } else {
+        out.type = v;
+      }
+    } else if (k === 'nullable') {
+      // Handled together with type
+    } else {
+      out[k] = sanitizeGeminiSchema(v);
+    }
+  }
+  if (schema.nullable !== undefined) {
+    out.nullable = Boolean(schema.nullable || isNullable);
+  } else if (isNullable) {
+    out.nullable = true;
+  }
+  return out;
+}
+
 // Anthropic Messages -> Gemini generateContent inner request.
 export function anthropicToGemini(body, resolved) {
   const toolNameById = new Map();
@@ -102,7 +137,7 @@ export function anthropicToGemini(body, resolved) {
       functionDeclarations: body.tools.map(t => ({
         name: t.name,
         description: t.description || '',
-        ...(t.input_schema ? { parameters: t.input_schema } : {})
+        ...(t.input_schema ? { parameters: sanitizeGeminiSchema(t.input_schema) } : {})
       }))
     }];
     const choice = body.tool_choice;
@@ -192,7 +227,7 @@ export function openAIToGemini(body, resolved) {
     const decls = [];
     for (const t of body.tools) {
       const fn = t.type === 'function' ? t.function : t;
-      if (fn?.name) decls.push({ name: fn.name, description: fn.description || '', ...(fn.parameters ? { parameters: fn.parameters } : {}) });
+      if (fn?.name) decls.push({ name: fn.name, description: fn.description || '', ...(fn.parameters ? { parameters: sanitizeGeminiSchema(fn.parameters) } : {}) });
     }
     if (decls.length) request.tools = [{ functionDeclarations: decls }];
   }
