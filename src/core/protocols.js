@@ -1,10 +1,39 @@
 import { randomUUID } from 'node:crypto';
 const bad = message => Object.assign(new Error(message), { status: 400 });
+
 export function effortFrom(body) {
   const values = [body.reasoning_effort, body.reasoning?.effort, body.output_config?.effort].filter(x => x !== undefined);
   if (new Set(values).size > 1) throw bad('Conflicting reasoning effort fields');
   return values[0];
 }
+
+function anthropicImageToOpenAI(block) {
+  if (block.type === 'image_url') {
+    if (block.image_url?.url) return block;
+    if (typeof block.image_url === 'string') return { type: 'image_url', image_url: { url: block.image_url } };
+  }
+  const src = block.source;
+  if (!src) throw bad('Invalid image content: missing source');
+  let url = '';
+  if (src.type === 'base64') {
+    if (!src.data) throw bad('Invalid image content: missing base64 data');
+    const mediaType = src.media_type || 'image/png';
+    url = `data:${mediaType};base64,${src.data}`;
+  } else if (src.type === 'url') {
+    if (!src.url) throw bad('Invalid image content: missing url');
+    url = src.url;
+  } else if (typeof src.data === 'string' && src.data.startsWith('data:')) {
+    url = src.data;
+  } else if (typeof src.url === 'string') {
+    url = src.url;
+  }
+  if (!url) throw bad('Invalid image content: unrecognized source format');
+  const part = { type: 'image_url', image_url: { url } };
+  const detail = src.detail || block.detail;
+  if (detail) part.image_url.detail = detail;
+  return part;
+}
+
 export function anthropicToOpenAI(body, resolved) {
   if (body.thinking || body.output_config?.format) throw bad('Thinking budgets and structured output conversion are not supported');
   const messages = [];
@@ -16,18 +45,46 @@ export function anthropicToOpenAI(body, resolved) {
     if (!['user', 'assistant'].includes(m.role)) throw bad('Invalid message role');
     if (typeof m.content === 'string') { messages.push({ role: m.role, content: m.content }); continue; }
     if (!Array.isArray(m.content)) throw bad('Invalid message content');
-    const text = [], calls = [], results = [];
+    const parts = [], calls = [], results = [];
     for (const block of m.content) {
-      if (block.type === 'text') text.push(block.text);
-      else if (block.type === 'tool_use' && m.role === 'assistant') calls.push({ id: block.id, type: 'function', function: { name: block.name, arguments: JSON.stringify(block.input) } });
-      else if (block.type === 'tool_result' && m.role === 'user') {
+      if (block.type === 'text') {
+        parts.push({ type: 'text', text: block.text ?? '' });
+      } else if (block.type === 'image' || block.type === 'image_url') {
+        parts.push(anthropicImageToOpenAI(block));
+      } else if (block.type === 'tool_use' && m.role === 'assistant') {
+        calls.push({ id: block.id, type: 'function', function: { name: block.name, arguments: JSON.stringify(block.input) } });
+      } else if (block.type === 'tool_result' && m.role === 'user') {
         const content = block.content ?? '';
-        if (Array.isArray(content) && content.some(x => x.type !== 'text')) throw bad('Unsupported tool result block');
-        results.push({ role: 'tool', tool_call_id: block.tool_use_id, content: Array.isArray(content) ? content.map(x => x.text).join('\n') : content });
-      } else throw bad(`Unsupported content block: ${block.type}`);
+        let toolContent;
+        if (typeof content === 'string') {
+          toolContent = content;
+        } else if (Array.isArray(content)) {
+          const hasImage = content.some(x => x.type === 'image' || x.type === 'image_url');
+          if (hasImage) {
+            toolContent = content.map(b => {
+              if (b.type === 'text') return { type: 'text', text: b.text ?? '' };
+              if (b.type === 'image' || b.type === 'image_url') return anthropicImageToOpenAI(b);
+              return { type: 'text', text: typeof b === 'string' ? b : JSON.stringify(b) };
+            });
+          } else {
+            toolContent = content.map(x => x.text ?? '').join('\n');
+          }
+        } else {
+          toolContent = JSON.stringify(content);
+        }
+        results.push({ role: 'tool', tool_call_id: block.tool_use_id, content: toolContent });
+      } else {
+        throw bad(`Unsupported content block: ${block.type}`);
+      }
     }
     messages.push(...results);
-    if (text.length || calls.length) messages.push({ role: m.role, content: text.join('\n') || null, ...(calls.length ? { tool_calls: calls } : {}) });
+    if (parts.length || calls.length) {
+      const hasImage = parts.some(p => p.type === 'image_url');
+      const content = hasImage
+        ? parts
+        : (parts.map(p => p.text).join('\n') || null);
+      messages.push({ role: m.role, content, ...(calls.length ? { tool_calls: calls } : {}) });
+    }
   }
   const payload = { model: resolved.upstreamId, messages, max_tokens: body.max_tokens, stream: !!body.stream };
   for (const key of ['temperature', 'top_p']) if (body[key] !== undefined) payload[key] = body[key];
@@ -42,6 +99,7 @@ export function anthropicToOpenAI(body, resolved) {
   if (resolved.effort) payload.reasoning_effort = resolved.effort;
   return payload;
 }
+
 export function openAIToAnthropic(data, publicModel) {
   const choice = data.choices?.[0];
   if (!choice?.message) throw new Error('Invalid upstream response');

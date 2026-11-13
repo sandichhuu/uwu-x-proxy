@@ -253,7 +253,7 @@ export async function run(store, req, res, kind) {
 }
 export function inferenceRouter(store) {
   const r = express.Router(), guard = auth(store);
-  const serialize = (m, anthropic) => anthropic ? { id: m.id, type: 'model', display_name: m.name || m.id, created_at: m.createdAt || '1970-01-01T00:00:00Z' } : { id: m.id, object: 'model', created: 0, owned_by: 'uwu-x-proxy' };
+  const serialize = (m, anthropic) => anthropic ? { id: m.id, type: 'model', display_name: m.name || m.id, created_at: m.createdAt || '1970-01-01T00:00:00Z', input_modalities: ['text', 'image'], modalities: ['text', 'image'] } : { id: m.id, object: 'model', created: 0, owned_by: 'uwu-x-proxy', input_modalities: ['text', 'image'], modalities: ['text', 'image'] };
   r.get('/models', guard, (req, res) => {
     const anthropic = !!req.get('anthropic-version');
     const publicRegistry = store.list('routes').length ? store.list('routes') : store.list('models');

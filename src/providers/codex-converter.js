@@ -3,9 +3,29 @@ export function anthropicToResponses(body, resolved) {
   const input = [];
   if (body.system) input.push({ role: 'system', content: typeof body.system === 'string' ? body.system : body.system.filter(x => x.type === 'text').map(x => x.text).join('\n') });
   for (const message of body.messages) {
-    const blocks = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content;
-    const text = blocks.filter(x => x.type === 'text').map(x => x.text).join('\n');
-    if (text) input.push({ type: 'message', role: message.role, content: text });
+    const blocks = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : (message.content || []);
+    const hasImage = blocks.some(x => x.type === 'image' || x.type === 'image_url');
+    if (!hasImage) {
+      const text = blocks.filter(x => x.type === 'text').map(x => x.text).join('\n');
+      if (text) input.push({ type: 'message', role: message.role, content: text });
+    } else {
+      const contentParts = [];
+      for (const block of blocks) {
+        if (block.type === 'text') {
+          contentParts.push({ type: 'input_text', text: block.text || '' });
+        } else if (block.type === 'image') {
+          const src = block.source || {};
+          const url = src.type === 'base64' && src.data
+            ? `data:${src.media_type || 'image/png'};base64,${src.data}`
+            : (src.url || src.data || '');
+          if (url) contentParts.push({ type: 'input_image', image_url: url });
+        } else if (block.type === 'image_url') {
+          const url = block.image_url?.url || block.url || '';
+          if (url) contentParts.push({ type: 'input_image', image_url: url });
+        }
+      }
+      if (contentParts.length) input.push({ type: 'message', role: message.role, content: contentParts });
+    }
     for (const block of blocks) {
       if (block.type === 'tool_use') input.push({ type: 'function_call', id: codexId(block.id), call_id: codexId(block.id), name: block.name, arguments: JSON.stringify(block.input || {}) });
       if (block.type === 'tool_result') input.push({ type: 'function_call_output', call_id: codexId(block.tool_use_id), output: typeof block.content === 'string' ? block.content : JSON.stringify(block.content) });

@@ -90,6 +90,28 @@ export function sanitizeGeminiSchema(schema) {
   return out;
 }
 
+function anthropicImageToGeminiPart(b) {
+  if (b.type === 'image') {
+    const src = b.source;
+    if (!src) throw bad('Invalid image content: missing source');
+    if (src.type === 'base64' && src.data) {
+      return { inlineData: { mimeType: src.media_type || 'image/png', data: src.data } };
+    }
+    if (typeof src.data === 'string' && src.data.startsWith('data:')) {
+      const match = /^data:([^;]+);base64,(.+)$/.exec(src.data);
+      if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
+    }
+    throw bad('Gemini requires base64 image data');
+  }
+  if (b.type === 'image_url') {
+    const url = b.image_url?.url || b.url || '';
+    const match = /^data:([^;]+);base64,(.+)$/.exec(url);
+    if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
+    throw bad('Gemini requires base64 image data');
+  }
+  throw bad('Unsupported image block');
+}
+
 // Anthropic Messages -> Gemini generateContent inner request.
 export function anthropicToGemini(body, resolved) {
   const toolNameById = new Map();
@@ -114,8 +136,18 @@ export function anthropicToGemini(body, resolved) {
       const parts = [];
       for (const b of blocks) {
         if (b.type === 'text') { if (b.text) parts.push({ text: b.text }); }
+        else if (b.type === 'image' || b.type === 'image_url') {
+          parts.push(anthropicImageToGeminiPart(b));
+        }
         else if (b.type === 'tool_result') {
           parts.push({ functionResponse: { name: toolNameById.get(b.tool_use_id) || 'tool_result', response: toolResultToObject(b.content) } });
+          if (Array.isArray(b.content)) {
+            for (const item of b.content) {
+              if (item?.type === 'image' || item?.type === 'image_url') {
+                parts.push(anthropicImageToGeminiPart(item));
+              }
+            }
+          }
         }
         else throw bad(`Unsupported content block: ${b.type}`);
       }
@@ -169,7 +201,7 @@ function openAIContentToText(content) {
       if (typeof block === 'string') { chunks.push(block); continue; }
       const type = block?.type || 'text';
       if (type === 'text' || type === 'input_text') chunks.push(block.text || '');
-      else if (type === 'image_url' || type === 'input_image') throw bad('Image content is not supported');
+      else if (type === 'image_url' || type === 'input_image') { /* extracted by user parts */ }
       else throw bad(`Unsupported content block: ${type}`);
     }
     return chunks.filter(Boolean).join('\n');
@@ -214,8 +246,37 @@ export function openAIToGemini(body, resolved) {
       continue;
     }
     if (m.role === 'user') {
-      const text = openAIContentToText(m.content);
-      if (text) contents.push({ role: 'user', parts: [{ text }] });
+      const parts = [];
+      if (typeof m.content === 'string') {
+        if (m.content) parts.push({ text: m.content });
+      } else if (Array.isArray(m.content)) {
+        const textChunks = [];
+        const flushText = () => {
+          if (textChunks.length) {
+            parts.push({ text: textChunks.join('\n') });
+            textChunks.length = 0;
+          }
+        };
+        for (const block of m.content) {
+          if (typeof block === 'string') { if (block) textChunks.push(block); continue; }
+          const type = block?.type || 'text';
+          if (type === 'text' || type === 'input_text') {
+            if (block.text) textChunks.push(block.text);
+          } else if (type === 'image_url' || type === 'input_image') {
+            flushText();
+            const url = block.image_url?.url || block.url || (typeof block.image === 'string' ? block.image : '');
+            const match = /^data:([^;]+);base64,(.+)$/.exec(url);
+            if (!match) throw bad('Gemini requires base64 data URLs for images');
+            parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+          } else {
+            throw bad(`Unsupported content block: ${type}`);
+          }
+        }
+        flushText();
+      } else if (m.content !== null && m.content !== undefined) {
+        parts.push({ text: String(m.content) });
+      }
+      if (parts.length) contents.push({ role: 'user', parts });
       continue;
     }
     throw bad('Invalid message role');

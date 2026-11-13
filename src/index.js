@@ -21,7 +21,7 @@ export function createApp(store, integrationOptions) {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '50mb' }));
   app.get('/health', (_, res) => res.json({ ok: true, service: 'uwu-x-proxy' }));
   app.use('/admin/api/integrations', auth(store, true), integrationRouter(store, integrationOptions));
   app.use('/admin/api', adminRouter(store));

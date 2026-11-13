@@ -9,6 +9,24 @@ const displayPath = '~/.dsh/settings.yaml';
 const mapping = { minimal: 'low', low: 'medium', medium: 'high', high: 'xhigh', xhigh: 'max', max: 'ultra' };
 const conflict = message => Object.assign(new Error(message), { status: 409 });
 const isMap = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+function syncCordisPatch(prov) {
+  try {
+    const cordisPatchFile = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'cordis.patch.yml');
+    if (!fs.existsSync(cordisPatchFile)) return;
+    const doc = YAML.parseDocument(fs.readFileSync(cordisPatchFile, 'utf8'));
+    const items = doc.toJS();
+    if (Array.isArray(items)) {
+      const idx = items.findIndex(x => x?.id === 'llm-pi-ai' || x?.name === '@deepseek-ai/dsh-llm-pi-ai');
+      if (idx >= 0) {
+        doc.setIn([idx, 'config', 'providers', 'x-proxy'], prov);
+        fs.writeFileSync(cordisPatchFile, doc.toString(), 'utf8');
+      }
+    }
+  } catch (err) {
+    console.warn('syncCordisPatch failed:', err.message);
+  }
+}
+
 export function inspect(doc) {
   if (!isMap(doc)) return { state: 'invalid', diagnostic: 'YAML root must be a mapping.' };
   const llm = doc['llm-pi-ai'];
@@ -74,11 +92,13 @@ export function createDshIntegration(store, { file = path.join(os.homedir(), '.d
       name: m.name || m.id,
       contextWindow,
       maxTokens,
+      input: m.input || ['text', 'image'],
       ...(reasoningEfforts ? { reasoningEfforts } : {})
     };
   }
   function provider() {
     return { displayName: 'uwu-x-proxy', apiKeyEnv: 'UWU_PROXY_KEY', api: 'anthropic-messages', baseURL,
+      defaultInput: ['text', 'image'],
       models: (store.list('routes').length ? store.list('routes') : store.list('models')).filter(m => m.enabled !== false).map(modelEntry) };
   }
   // DSH reads limits stored on model/route cards (persisted at import time
