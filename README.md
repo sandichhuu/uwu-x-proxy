@@ -100,3 +100,6 @@ Auto integrate models into DeepSeek Harness, only 1 click.
 ## License
 
 GPL-3.0-or-later. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+
+## Support
+[DISCORD](https://discord.gg/Hneg7nVYVg)
